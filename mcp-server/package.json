@@ -1,0 +1,37 @@
+{
+  "name": "blueprint-agent-bridge-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that lets AI agents read and edit Unreal Engine Blueprints through the Blueprint Agent Bridge plugin.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Matteo La Barbera",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Teolabar03/BlueprintAgentBridge"
+  },
+  "bin": {
+    "blueprint-agent-bridge-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "node dist/selftest.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}

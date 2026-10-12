@@ -1,0 +1,120 @@
+// Copyright (c) 2026 Matteo La Barbera. MIT License.
+
+#include "BABCommandlet.h"
+#include "BABDispatcher.h"
+#include "BABHttpServer.h"
+#include "BABContext.h"
+#include "BABTypes.h"
+#include "BlueprintAgentBridgeModule.h"
+
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/CoreMisc.h"
+#include "Containers/Ticker.h"
+#include "Async/TaskGraphInterfaces.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "TickableEditorObject.h"
+
+UBlueprintAgentBridgeCommandlet::UBlueprintAgentBridgeCommandlet()
+{
+	IsClient = false;
+	IsServer = false;
+	IsEditor = true;
+	LogToConsole = true;
+	ShowErrorCount = false;
+}
+
+int32 UBlueprintAgentBridgeCommandlet::Main(const FString& Params)
+{
+	TArray<FString> Tokens;
+	TArray<FString> Switches;
+	TMap<FString, FString> Values;
+	ParseCommandLine(*Params, Tokens, Switches, Values);
+
+	BABRegisterAllOperations();
+	BAB::EnsureAssetRegistryScanned(TEXT("/Game"));
+
+	const FString* RequestFile = Values.Find(TEXT("request"));
+	const bool bServe = Switches.Contains(TEXT("serve")) || Switches.Contains(TEXT("server"));
+	if (!RequestFile && !bServe)
+	{
+		UE_LOG(LogBlueprintAgentBridge, Error, TEXT("Usage: -run=BlueprintAgentBridge -request=<file.json> [-response=<file.json>]  |  -serve [-port=8765] [-idle=<seconds>]"));
+		return 1;
+	}
+
+	int32 ExitCode = 0;
+	if (RequestFile)
+	{
+		FString RequestText;
+		if (!FFileHelper::LoadFileToString(RequestText, **RequestFile))
+		{
+			UE_LOG(LogBlueprintAgentBridge, Error, TEXT("Cannot read request file %s"), **RequestFile);
+			return 1;
+		}
+		const FString ResponseText = FBABDispatcher::Get().HandleRequestText(RequestText, /*bPretty*/ true);
+		FString ResponseFile = Values.FindRef(TEXT("response"));
+		if (ResponseFile.IsEmpty())
+		{
+			ResponseFile = *RequestFile + TEXT(".response.json");
+		}
+		if (!FFileHelper::SaveStringToFile(ResponseText, *ResponseFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		{
+			UE_LOG(LogBlueprintAgentBridge, Error, TEXT("Cannot write response file %s"), *ResponseFile);
+			return 1;
+		}
+		UE_LOG(LogBlueprintAgentBridge, Display, TEXT("Response written to %s"), *ResponseFile);
+		FString Error;
+		TSharedPtr<FJsonObject> Response = BAB::JsonFromString(ResponseText, Error);
+		bool bOk = false;
+		if (Response.IsValid())
+		{
+			Response->TryGetBoolField(TEXT("ok"), bOk);
+		}
+		ExitCode = bOk ? 0 : 2;
+	}
+
+	if (bServe)
+	{
+		int32 Port = 8765;
+		if (const FString* PortValue = Values.Find(TEXT("port")))
+		{
+			Port = FCString::Atoi(**PortValue);
+		}
+		double IdleTimeout = 0.0;
+		if (const FString* IdleValue = Values.Find(TEXT("idle")))
+		{
+			IdleTimeout = FCString::Atod(**IdleValue);
+		}
+		FString Error;
+		if (!FBABHttpServer::Get().Start((uint32)Port, Error))
+		{
+			UE_LOG(LogBlueprintAgentBridge, Error, TEXT("%s"), *Error);
+			return 3;
+		}
+		UE_LOG(LogBlueprintAgentBridge, Display, TEXT("BAB_SERVER_READY port=%d pid=%u"), Port, FPlatformProcess::GetCurrentProcessId());
+
+		const double StartTime = FPlatformTime::Seconds();
+		double LastTick = StartTime;
+		while (!IsEngineExitRequested() && !FBABHttpServer::Get().WasShutdownRequested())
+		{
+			const double Now = FPlatformTime::Seconds();
+			const float DeltaTime = (float)(Now - LastTick);
+			LastTick = Now;
+
+			FTSTicker::GetCoreTicker().Tick(DeltaTime);
+			FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+			FTickableEditorObject::TickObjects(DeltaTime);
+
+			if (IdleTimeout > 0.0 && (Now - FMath::Max(FBABHttpServer::Get().GetLastRequestTime(), StartTime)) > IdleTimeout)
+			{
+				UE_LOG(LogBlueprintAgentBridge, Display, TEXT("Idle for %.0f seconds, shutting down."), IdleTimeout);
+				break;
+			}
+			FPlatformProcess::Sleep(0.004f);
+		}
+		FBABHttpServer::Get().Stop();
+		UE_LOG(LogBlueprintAgentBridge, Display, TEXT("Blueprint Agent Bridge server loop ended after %d request(s)."), FBABHttpServer::Get().GetRequestCount());
+	}
+	return ExitCode;
+}

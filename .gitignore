@@ -1,0 +1,42 @@
+# Unreal Engine
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+.vs/
+.vsconfig
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+*.xcodeproj
+*.xcworkspace
+*.code-workspace
+.idea/
+test-project/Content/Developers/
+test-project/Content/__ExternalActors__/
+test-project/Content/__ExternalObjects__/
+test-project/Content/Scratch/
+test-project/Plugins/
+
+# Node / MCP server
+node_modules/
+mcp-server/dist/
+*.tsbuildinfo
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local tool output
+docs/agy/
+*.log
