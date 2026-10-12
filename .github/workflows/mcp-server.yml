@@ -1,0 +1,43 @@
+name: mcp-server
+
+on:
+  push:
+    paths:
+      - "mcp-server/**"
+      - ".github/workflows/mcp-server.yml"
+  pull_request:
+    paths:
+      - "mcp-server/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mcp-server/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Smoke test the stdio server (no engine needed)
+        run: |
+          node -e "
+          const { spawn } = require('node:child_process');
+          const child = spawn('node', ['dist/index.js', '--mode', 'http'], { stdio: ['pipe', 'pipe', 'inherit'] });
+          let out = '';
+          child.stdout.on('data', (d) => { out += d.toString(); });
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'ci', version: '0' } } }) + '\n');
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
+          setTimeout(() => {
+            child.kill();
+            const ok = out.includes('bp_read_graph') && out.includes('bp_compile');
+            console.log(ok ? 'tools/list ok' : out);
+            process.exit(ok ? 0 : 1);
+          }, 4000);
+          "
