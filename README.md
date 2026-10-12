@@ -73,6 +73,7 @@ Any client: run `node mcp-server/dist/index.js` over stdio. Configuration by fla
 | `--keep-alive` | `BAB_KEEP_ALIVE` | leave the headless editor running when the MCP server exits |
 | `--timeout <s>` | `BAB_STARTUP_TIMEOUT` | how long to wait for the headless editor (default 600) |
 | `--commandlet-timeout <s>` | `BAB_COMMANDLET_TIMEOUT` | per-request limit in `commandlet` mode (default 900) |
+| `--allow-second-editor` | `BAB_ALLOW_SECOND_EDITOR` | start a headless editor even if an interactive editor has the project open (see below) |
 
 Then give the agent the skill in `skills/blueprint-agent-bridge/SKILL.md` (copy it to
 `.claude/skills/` for Claude Code, or paste the content into `AGENTS.md` for Codex).
@@ -98,11 +99,24 @@ reloads them in a fresh editor:
 node mcp-server/dist/demo.js --project examples/BridgeDemo/BridgeDemo.uproject
 ```
 
-## Using the editor instead of the headless process
+## Working with the editor open
 
 Start the editor with `-BABServer` (optionally `-BABPort=8765`), or enable *Auto Start Server* in
-Editor Preferences > Plugins > Blueprint Agent Bridge, or type `BAB.StartServer` in the console.
-With `--mode http` the MCP server connects to it and edits appear live in open Blueprint editors.
+Editor Preferences > Plugins > Blueprint Agent Bridge (recommended: do it once per project), or type
+`BAB.StartServer` in the console. The MCP server finds the running bridge first and connects to it:
+edits happen inside your editor, open graphs update live, the asset turns dirty, `bp_compile` is the
+Compile button and `bp_save` saves from the same process. Every editing tool is one step in the
+editor undo history (Ctrl+Z works; the agent also has `bp_undo` / `bp_redo`, limited to its own
+transactions unless forced).
+
+If the editor is open **without** the bridge, the MCP server refuses to start a second, headless
+editor and explains how to turn the bridge on. A second editor would edit a separate copy of the
+assets: your open editor would not show the changes and could silently overwrite them on save
+(Unreal does not warn when a loaded package changes on disk). `--allow-second-editor`
+(`BAB_ALLOW_SECOND_EDITOR=1`) overrides the check if you really want that. The server also refuses
+to use a bridge that belongs to a different project than the one it was configured for.
+
+Avoid editing while Play In Editor is running; the bridge warns when it is.
 
 ## Tools
 
@@ -112,7 +126,7 @@ With `--mode http` the MCP server connects to it and edits appear live in open B
 `bp_split_pin`, `bp_recombine_pin`, `bp_set_node_property`, `bp_reconstruct_node`,
 `bp_export_text`, `bp_import_text`, `bp_auto_layout`, `bp_add_variable`, `bp_update_variable`,
 `bp_remove_variable`, `bp_add_local_variable`, `bp_add_function`, `bp_remove_graph`, `bp_compile`,
-`bp_save`, `bp_batch`, `bp_server`.
+`bp_save`, `bp_undo`, `bp_redo`, `bp_batch`, `bp_server`.
 
 Full reference: [docs/protocol.md](docs/protocol.md). Text format: [docs/graph-format.md](docs/graph-format.md).
 Design: [docs/architecture.md](docs/architecture.md).

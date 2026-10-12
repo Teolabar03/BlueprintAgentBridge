@@ -244,6 +244,24 @@ bool FBABBranchAndMacroTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("no errors"), (int32)Compile.Data->GetNumberField(TEXT("num_errors")), 0);
 	}
+
+	// Undo / redo: edits made inside an editor session are one transaction each.
+	const FString Knot = Add(TEXT("{\"type\":\"knot\"}"), TEXT("knot before undo"));
+	FBABResult Undo = Run(TEXT("bp_undo"), TEXT("{}"));
+	if (Undo.bOk)
+	{
+		TestTrue(TEXT("undo names the bridge transaction"), Undo.Data->GetStringField(TEXT("undone")).Contains(TEXT("bp_add_node")));
+		FBABResult AfterUndo = Run(TEXT("bp_read_graph"), ParamsFor(BP, TEXT("")));
+		TestFalse(TEXT("undone node is gone"), AfterUndo.Data->GetStringField(TEXT("text")).Contains(FString::Printf(TEXT("[%s]"), *Knot)));
+		FBABResult Redo = Run(TEXT("bp_redo"), TEXT("{}"));
+		TestTrue(TEXT("redo ok"), Redo.bOk);
+		FBABResult AfterRedo = Run(TEXT("bp_read_graph"), ParamsFor(BP, TEXT("")));
+		TestTrue(TEXT("redone node is back"), AfterRedo.Data->GetStringField(TEXT("text")).Contains(FString::Printf(TEXT("[%s]"), *Knot)));
+	}
+	else
+	{
+		AddInfo(FString::Printf(TEXT("undo not available in this context: %s"), *Errors(Undo)));
+	}
 	return true;
 }
 

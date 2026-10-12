@@ -23,7 +23,16 @@ export interface BridgeConfig {
   startupTimeoutSec: number;
   commandletTimeoutSec: number;
   keepAlive: boolean;
+  /** Start a headless editor even when an interactive editor already has the project open. */
+  allowSecondEditor: boolean;
   extraArgs: string[];
+}
+
+export interface EditorProcess {
+  pid: number;
+  commandLine: string;
+  /** true for a headless bridge (-run=BlueprintAgentBridge), false for an interactive editor */
+  isBridge: boolean;
 }
 
 export interface BridgeResponse {
@@ -93,8 +102,65 @@ export function loadConfig(argv: string[], env: NodeJS.ProcessEnv): BridgeConfig
     startupTimeoutSec: Number(argValue(argv, "--timeout") ?? env.BAB_STARTUP_TIMEOUT ?? 600),
     commandletTimeoutSec: Number(argValue(argv, "--commandlet-timeout") ?? env.BAB_COMMANDLET_TIMEOUT ?? 900),
     keepAlive: argv.includes("--keep-alive") || /^(1|true|yes)$/i.test(env.BAB_KEEP_ALIVE ?? ""),
+    allowSecondEditor: argv.includes("--allow-second-editor") || /^(1|true|yes)$/i.test(env.BAB_ALLOW_SECOND_EDITOR ?? ""),
     extraArgs: (env.BAB_EXTRA_ARGS ?? "").split(" ").filter(Boolean),
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Running editors
+
+function listUnrealProcesses(): Array<{ pid: number; commandLine: string }> {
+  try {
+    if (platform() === "win32") {
+      const script =
+        "Get-CimInstance Win32_Process -Filter \"Name='UnrealEditor.exe' OR Name='UnrealEditor-Cmd.exe'\" | ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.CommandLine }";
+      const encoded = Buffer.from(script, "utf16le").toString("base64");
+      const out = execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000, windowsHide: true });
+      return out
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const sep = line.indexOf("|");
+          return { pid: Number(line.slice(0, sep)), commandLine: line.slice(sep + 1) };
+        })
+        .filter((p) => Number.isFinite(p.pid) && p.pid > 0);
+    }
+    const out = execSync("ps -axo pid=,command=", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000 });
+    return out
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /UnrealEditor/.test(line))
+      .map((line) => {
+        const match = line.match(/^(\d+)\s+(.*)$/);
+        return match ? { pid: Number(match[1]), commandLine: match[2] } : { pid: 0, commandLine: line };
+      })
+      .filter((p) => p.pid > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** Unreal Editor processes that have this project open, other than the given pid. */
+export function findEditorProcesses(projectFile: string | undefined, excludePid?: number): EditorProcess[] {
+  if (!projectFile) return [];
+  const normalized = resolve(projectFile).replace(/\\/g, "/").toLowerCase();
+  const name = basename(projectFile).toLowerCase();
+  return listUnrealProcesses()
+    .filter((p) => p.pid !== excludePid && p.pid !== process.pid)
+    .filter((p) => {
+      const cmd = p.commandLine.replace(/\\/g, "/").toLowerCase();
+      return cmd.includes(normalized) || cmd.includes("/" + name) || cmd.includes(" " + name);
+    })
+    .map((p) => ({ pid: p.pid, commandLine: p.commandLine, isBridge: /-run=blueprintagentbridge/i.test(p.commandLine) }));
+}
+
+export function describeEditorProcesses(editors: EditorProcess[]): string {
+  if (editors.length === 0) return "no other Unreal Editor process has this project open";
+  return editors
+    .map((e) => `pid ${e.pid}: ${e.isBridge ? "headless bridge (-run=BlueprintAgentBridge)" : "interactive editor"}${/-babserver/i.test(e.commandLine) ? " started with -BABServer" : ""}`)
+    .join("; ");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -218,13 +284,51 @@ export class Bridge {
     }
   }
 
+  get expectedProjectName(): string | undefined {
+    return this.config.projectFile ? basename(this.config.projectFile, ".uproject") : undefined;
+  }
+
+  /** The bridge that answers on the port must belong to the project this server was configured for. */
+  private checkProjectMatches(info: HealthInfo): void {
+    const expected = this.expectedProjectName;
+    if (expected && info.project && info.project.toLowerCase() !== expected.toLowerCase()) {
+      throw new Error(
+        `The bridge on ${this.baseUrl} belongs to project "${info.project}" (pid ${info.pid}), not "${expected}". ` +
+          `Use --port / BAB_PORT to pick a free port for this project, or stop that server first.`
+      );
+    }
+  }
+
   async ensureConnected(): Promise<void> {
     if (this.config.mode === "commandlet") return;
-    if (await this.health()) return;
+    const info = await this.health();
+    if (info) {
+      this.checkProjectMatches(info);
+      return;
+    }
+    const editors = findEditorProcesses(this.config.projectFile, this.child?.pid);
+    const interactive = editors.filter((e) => !e.isBridge);
+    const otherBridges = editors.filter((e) => e.isBridge);
     if (this.config.mode === "http") {
       throw new Error(
-        `No Blueprint Agent Bridge server answers at ${this.baseUrl}. Start the editor with -BABServer (or run the console command BAB.StartServer), ` +
+        `No Blueprint Agent Bridge server answers at ${this.baseUrl} (${describeEditorProcesses(editors)}). ` +
+          `In the open editor run the console command "BAB.StartServer ${this.config.port}", or start it with -BABServer, ` +
           `or set BAB_MODE=auto to let this server launch a headless editor.`
+      );
+    }
+    if (interactive.length > 0 && !this.config.allowSecondEditor) {
+      throw new Error(
+        `Unreal Editor already has this project open without the bridge server (${describeEditorProcesses(interactive)}). ` +
+          `Starting a second, headless editor would edit a separate copy: your open editor would not show the changes and could overwrite them on save. ` +
+          `Do one of these: (1) in that editor, open the console (~) and run "BAB.StartServer ${this.config.port}", then retry; ` +
+          `(2) enable "Auto Start Server" in Editor Preferences > Plugins > Blueprint Agent Bridge so it is always on; ` +
+          `(3) close the editor; (4) only if you really want two editors, start this MCP server with --allow-second-editor (or BAB_ALLOW_SECOND_EDITOR=1).`
+      );
+    }
+    if (otherBridges.length > 0 && !this.config.allowSecondEditor) {
+      throw new Error(
+        `A headless bridge for this project is already running but not on port ${this.config.port} (${describeEditorProcesses(otherBridges)}). ` +
+          `Point this server at its port with --port, stop it, or pass --allow-second-editor.`
       );
     }
     if (!this.starting) {
@@ -233,6 +337,11 @@ export class Bridge {
       });
     }
     await this.starting;
+  }
+
+  /** Other Unreal Editor processes that have the project open (for status reports). */
+  detectEditors(): EditorProcess[] {
+    return findEditorProcesses(this.config.projectFile, this.child?.pid);
   }
 
   private requireLaunchInfo(): { cmd: string; project: string } {

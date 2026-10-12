@@ -7,11 +7,23 @@
 
 using FBABHandler = TFunction<FBABResult(const FJsonObject& Params)>;
 
+/** How the dispatcher treats an operation when it runs inside an interactive editor. */
+enum class EBABOpKind : uint8
+{
+	/** Does not modify anything: no transaction, no warnings. */
+	ReadOnly,
+	/** Modifies graphs or members: wrapped in an editor transaction so the user can undo it (editor mode only). */
+	Transactional,
+	/** Modifies state that is not undoable (compile, save, asset creation): no transaction. */
+	NonTransactional,
+};
+
 struct FBABOperation
 {
 	FString Name;
 	FString Description;
 	FBABHandler Handler;
+	EBABOpKind Kind = EBABOpKind::Transactional;
 };
 
 /**
@@ -24,7 +36,8 @@ class FBABDispatcher
 public:
 	static FBABDispatcher& Get();
 
-	void Register(const FString& Name, const FString& Description, FBABHandler Handler);
+	void Register(const FString& Name, const FString& Description, FBABHandler Handler, EBABOpKind Kind = EBABOpKind::Transactional);
+	void SetKind(const FString& Name, EBABOpKind Kind);
 	bool HasOperation(const FString& Name) const { return Operations.Contains(Name); }
 	TArray<FString> GetOperationNames() const;
 	TSharedRef<FJsonObject> DescribeOperations() const;
@@ -41,6 +54,9 @@ public:
 
 	/** Parses text, handles the request and serializes the response. Always returns valid JSON. */
 	FString HandleRequestText(const FString& RequestText, bool bPretty = false);
+
+	/** Prefix of the undo-history titles created by the bridge. */
+	static const TCHAR* TransactionPrefix();
 
 private:
 	TSharedRef<FJsonObject> HandleSingle(const FJsonObject& Request);

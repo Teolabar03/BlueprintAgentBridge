@@ -4,7 +4,7 @@
 // result into compact text so the agent spends as few tokens as possible.
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Bridge, BridgeResponse } from "./bridge.js";
+import { describeEditorProcesses, type Bridge, type BridgeResponse } from "./bridge.js";
 
 type Shape = Record<string, z.ZodTypeAny>;
 type Json = Record<string, unknown>;
@@ -382,6 +382,18 @@ export const TOOLS: ToolDef[] = [
     destructive: true,
   },
   {
+    name: "bp_undo",
+    description: "Editor mode only: undo the last transaction if the bridge made it (each editing tool is one undo step in the open editor). force=true also undoes the user's own last action.",
+    input: { force: z.boolean().optional() },
+    format: (r) => `undone: ${str(r.undone)}${r.next ? `\nnext undo would be: ${str(r.next)}` : ""}`,
+  },
+  {
+    name: "bp_redo",
+    description: "Editor mode only: redo the last undone bridge transaction.",
+    input: { force: z.boolean().optional() },
+    format: (r) => `redone: ${str(r.redone)}`,
+  },
+  {
     name: "bp_compile",
     description: "Compile the Blueprint. Returns errors and warnings with the node id, title and graph they refer to. Always compile after editing.",
     input: { blueprint, save: z.boolean().optional().describe("Save after a successful compile") },
@@ -461,7 +473,12 @@ export function registerTools(server: McpServer, bridge: Bridge): void {
         switch (args.action) {
           case "status": {
             const info = await bridge.health();
-            return { content: [{ type: "text" as const, text: info ? `running (${bridge.describeOwnership()}): ${JSON.stringify(info)}\n${bridge.describe()}` : `not running\n${bridge.describe()}` }] };
+            const editors = describeEditorProcesses(bridge.detectEditors());
+            const lines = [info ? `running (${bridge.describeOwnership()}): ${JSON.stringify(info)}` : "not running", bridge.describe(), `other editor processes on this project: ${editors}`];
+            if (!info && bridge.detectEditors().some((e) => !e.isBridge)) {
+              lines.push(`The project is open in an interactive editor without the bridge: ask the user to run "BAB.StartServer ${bridge.config.port}" in its console (or enable Auto Start Server in Editor Preferences) before editing.`);
+            }
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] };
           }
           case "start":
             await bridge.ensureConnected();

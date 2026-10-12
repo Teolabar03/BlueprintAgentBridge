@@ -66,6 +66,12 @@ Function names: if a bare name is ambiguous the error lists the candidates as `C
 - Variable and parameter types: `bool`, `byte`, `int`, `int64`, `float`, `name`, `string`, `text`, `object:Actor`, `class:Actor`, `softobject:Texture2D`, `struct:Vector`, `enum:ECollisionChannel`, `array<float>`, `set<name>`, `map<string,int>`, by-ref with a trailing `&`. `float` is the Blueprint Float (double precision).
 - Array, set and map inputs cannot have a default: connect a Make Array / Make Map node instead.
 
+## When the user has the editor open
+
+- `bp_status` / `bp_server status` tell you whether you are talking to the running editor (`mode: editor`) or to a headless process. In editor mode your edits appear live in the open graphs and each editing tool is one undo step: `bp_undo` reverts your last edit (never the user's own actions unless they ask you to force it).
+- If the bridge refuses to start because the project is open in an editor without the bridge, do not pass `--allow-second-editor` on your own: tell the user to run `BAB.StartServer 8765` in the editor console (or enable Auto Start Server in Editor Preferences > Plugins > Blueprint Agent Bridge) and retry. A second editor would edit a copy that the user cannot see and might overwrite.
+- Do not edit or compile while Play In Editor is running (the bridge warns about it).
+
 ## Rules
 
 - Never claim a Blueprint works before `bp_compile` reports zero errors.

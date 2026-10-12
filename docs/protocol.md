@@ -61,6 +61,18 @@ node inserted, ...).
 | `bp_compile` | `blueprint`, `save=false` | `status`, `success`, `num_errors`, `num_warnings`, `messages[] {severity, message, node, node_title, graph, pin}` |
 | `bp_save` | `blueprint`, `compile=true`, `force=false` | `saved`, `file`, `compile {...}` |
 
+### Editor session (interactive editor only)
+
+| op | params | result |
+|---|---|---|
+| `bp_undo` | `force` (also undo transactions not made by the bridge) | `undone` (transaction title), `next` |
+| `bp_redo` | `force` | `redone` |
+
+Inside a running editor every editing operation is wrapped in a transaction titled
+`Blueprint Agent Bridge: <op>` (one Ctrl+Z step); failed operations are cancelled and leave no
+partial change. Headless sessions keep no undo history, so these two operations fail there with a
+clear message. `bp_list_operations` reports the kind of each operation (`read`, `edit`, `other`).
+
 ### Graph reading and search
 
 | op | params | result |

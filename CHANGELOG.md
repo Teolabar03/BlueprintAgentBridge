@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.1 (2026-10-12)
+
+Working safely with the editor open.
+
+- Editor sessions: every edit is an undo transaction (`Blueprint Agent Bridge: <op>`), failed edits
+  are rolled back, new `bp_undo` / `bp_redo` tools (limited to bridge transactions unless forced),
+  warning while Play In Editor runs.
+- The MCP server refuses to start a second headless editor when the project is already open in an
+  interactive editor without the bridge (`--allow-second-editor` / `BAB_ALLOW_SECOND_EDITOR=1`
+  overrides), explains how to turn the bridge on, and refuses a bridge that belongs to another
+  project. `bp_server status` lists the editor processes that have the project open.
+
 ## 0.1.0 (2026-10-12)
 
 First public version.

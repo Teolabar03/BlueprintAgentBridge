@@ -1,6 +1,6 @@
 {
   "name": "blueprint-agent-bridge-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server that lets AI agents read and edit Unreal Engine Blueprints through the Blueprint Agent Bridge plugin.",
   "type": "module",
   "license": "MIT",

@@ -3,6 +3,11 @@
 #include "BABDispatcher.h"
 #include "BlueprintAgentBridgeModule.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/CoreMisc.h"
+#include "Editor.h"
+#include "ScopedTransaction.h"
+
+#define LOCTEXT_NAMESPACE "BlueprintAgentBridge"
 
 FBABDispatcher& FBABDispatcher::Get()
 {
@@ -10,13 +15,27 @@ FBABDispatcher& FBABDispatcher::Get()
 	return Instance;
 }
 
-void FBABDispatcher::Register(const FString& Name, const FString& Description, FBABHandler Handler)
+const TCHAR* FBABDispatcher::TransactionPrefix()
+{
+	return TEXT("Blueprint Agent Bridge: ");
+}
+
+void FBABDispatcher::Register(const FString& Name, const FString& Description, FBABHandler Handler, EBABOpKind Kind)
 {
 	FBABOperation Op;
 	Op.Name = Name;
 	Op.Description = Description;
 	Op.Handler = MoveTemp(Handler);
+	Op.Kind = Kind;
 	Operations.Add(Name, MoveTemp(Op));
+}
+
+void FBABDispatcher::SetKind(const FString& Name, EBABOpKind Kind)
+{
+	if (FBABOperation* Op = Operations.Find(Name))
+	{
+		Op->Kind = Kind;
+	}
 }
 
 TArray<FString> FBABDispatcher::GetOperationNames() const
@@ -33,9 +52,11 @@ TSharedRef<FJsonObject> FBABDispatcher::DescribeOperations() const
 	TArray<TSharedPtr<FJsonValue>> Ops;
 	for (const FString& Name : GetOperationNames())
 	{
+		const FBABOperation& Op = Operations[Name];
 		TSharedRef<FJsonObject> Entry = BAB::NewObject();
 		Entry->SetStringField(TEXT("name"), Name);
-		Entry->SetStringField(TEXT("description"), Operations[Name].Description);
+		Entry->SetStringField(TEXT("description"), Op.Description);
+		Entry->SetStringField(TEXT("kind"), Op.Kind == EBABOpKind::ReadOnly ? TEXT("read") : (Op.Kind == EBABOpKind::Transactional ? TEXT("edit") : TEXT("other")));
 		Ops.Add(BAB::ObjectValue(Entry));
 	}
 	Root->SetArrayField(TEXT("operations"), Ops);
@@ -49,7 +70,30 @@ FBABResult FBABDispatcher::Dispatch(const FString& Op, const FJsonObject& Params
 	{
 		return FBABResult::Fail(FString::Printf(TEXT("Unknown operation \"%s\". Known operations: %s"), *Op, *FString::Join(GetOperationNames(), TEXT(", "))));
 	}
-	return Operation->Handler(Params);
+
+	const bool bInteractiveEditor = !IsRunningCommandlet() && GEditor != nullptr;
+
+	FBABResult Result;
+	if (Operation->Kind == EBABOpKind::Transactional && bInteractiveEditor && GEditor->CanTransact())
+	{
+		// Inside a running editor every edit becomes one undo step, and a failed edit leaves nothing behind.
+		FScopedTransaction Transaction(FText::Format(LOCTEXT("OpTransaction", "{0}{1}"), FText::FromString(TransactionPrefix()), FText::FromString(Op)));
+		Result = Operation->Handler(Params);
+		if (!Result.bOk)
+		{
+			Transaction.Cancel();
+		}
+	}
+	else
+	{
+		Result = Operation->Handler(Params);
+	}
+
+	if (Operation->Kind != EBABOpKind::ReadOnly && bInteractiveEditor && GEditor->PlayWorld != nullptr)
+	{
+		Result.Warn(TEXT("Play In Editor is running: the change applies to the editor copy of the asset, stop PIE before compiling or saving."));
+	}
+	return Result;
 }
 
 TSharedRef<FJsonObject> FBABDispatcher::HandleSingle(const FJsonObject& Request)
@@ -139,3 +183,5 @@ FString FBABDispatcher::HandleRequestText(const FString& RequestText, bool bPret
 	}
 	return BAB::JsonToString(HandleRequest(Request.ToSharedRef()), bPretty);
 }
+
+#undef LOCTEXT_NAMESPACE

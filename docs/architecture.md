@@ -36,7 +36,14 @@ error messages are identical everywhere.
 | Mode | When | Notes |
 |---|---|---|
 | Headless commandlet (`-run=BlueprintAgentBridge -serve`) | default for agents; CI | No Slate, NullRHI, starts in 20-60 s. The commandlet ticks the core ticker, the task graph and the editor tickables so the HTTP module, asset loading and the action database keep working. |
-| Interactive editor (`-BABServer`, console `BAB.StartServer`, or the setting) | when a human watches the editor | Graph edits appear live in open Blueprint editors because the same `UEdGraph` notifications fire. |
+| Interactive editor (`-BABServer`, console `BAB.StartServer`, or the setting) | when a human watches the editor | Graph edits appear live in open Blueprint editors because the same `UEdGraph` notifications fire. Every editing operation runs inside an `FScopedTransaction` named `Blueprint Agent Bridge: <op>`, so it is one undo step; a failed operation cancels its transaction and leaves nothing behind. `bp_undo` / `bp_redo` act only on those transactions unless forced. |
+
+**One editor per project.** Before starting a headless editor, the MCP server lists the Unreal
+Editor processes that have the project open (PowerShell `Win32_Process` on Windows, `ps` elsewhere).
+If an interactive editor without the bridge is found it refuses, because two processes would hold two
+copies of the assets and the editor does not notice when a loaded package changes on disk (there is no
+prompt; last writer wins). The health endpoint also reports the project name, and the server refuses to
+talk to a bridge that belongs to another project.
 | One-shot commandlet (`-request` / `-response`) | scripts, CI | Each call pays the engine startup. |
 
 **Text format designed for agents.** See graph-format.md. Stable ids from node GUIDs, pins by
