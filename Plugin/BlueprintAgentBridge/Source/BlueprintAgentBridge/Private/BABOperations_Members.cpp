@@ -219,9 +219,35 @@ void BABRegisterOperations_Members()
 		}
 		if (HasField(Params, TEXT("default")) && Index != INDEX_NONE)
 		{
+			const FString Default = DefaultValueFromParams(Params, Ctx.Blueprint->NewVariables[Index].VarType);
+			// After the first full compile the class default object holds the value: write it there
+			// and keep the staging string in sync (the next compile re-applies and clears it).
+			bool bWrittenToDefaultObject = false;
+			if (UClass* GeneratedClass = Ctx.Blueprint->GeneratedClass)
+			{
+				if (FProperty* Property = FindFProperty<FProperty>(GeneratedClass, VarName))
+				{
+					if (UObject* DefaultObject = GeneratedClass->GetDefaultObject(false))
+					{
+						DefaultObject->Modify();
+						if (!FBlueprintEditorUtils::PropertyValueFromString(Property, Default, reinterpret_cast<uint8*>(DefaultObject), DefaultObject))
+						{
+							return FBABResult::Fail(FString::Printf(TEXT("Cannot parse \"%s\" as a default for %s (%s)."), *Default, *VarName.ToString(), *PinTypeToString(Ctx.Blueprint->NewVariables[Index].VarType)));
+						}
+						bWrittenToDefaultObject = true;
+					}
+				}
+			}
 			Ctx.Blueprint->Modify();
-			Ctx.Blueprint->NewVariables[Index].DefaultValue = DefaultValueFromParams(Params, Ctx.Blueprint->NewVariables[Index].VarType);
-			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Ctx.Blueprint);
+			Ctx.Blueprint->NewVariables[Index].DefaultValue = Default;
+			if (bWrittenToDefaultObject)
+			{
+				FBlueprintEditorUtils::MarkBlueprintAsModified(Ctx.Blueprint);
+			}
+			else
+			{
+				FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Ctx.Blueprint);
+			}
 		}
 		ApplyVariableOptions(Ctx.Blueprint, VarName, Params, Result);
 		if (TSharedPtr<FJsonObject> Variable = FindVariableJson(Ctx.Blueprint, VarName)) Result.Data->SetObjectField(TEXT("variable"), Variable);

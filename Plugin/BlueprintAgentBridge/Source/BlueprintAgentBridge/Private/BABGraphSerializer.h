@@ -40,4 +40,7 @@ namespace BAB
 
 	TSharedRef<FJsonObject> BlueprintToJson(UBlueprint* BP);
 	FString BlueprintToText(UBlueprint* BP);
+
+	/** Current default of a member variable: the staging string before the first compile, the class default object afterwards. */
+	FString VariableDefaultString(UBlueprint* BP, const struct FBPVariableDescription& Var);
 }

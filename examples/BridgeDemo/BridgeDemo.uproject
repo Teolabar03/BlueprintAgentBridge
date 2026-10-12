@@ -1,0 +1,22 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.6",
+	"Category": "",
+	"Description": "Demo project: Blueprints built entirely by an agent through the Blueprint Agent Bridge.",
+	"Modules": [
+		{
+			"Name": "BridgeDemo",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "BlueprintAgentBridge",
+			"Enabled": true
+		}
+	],
+	"AdditionalPluginDirectories": [
+		"../../Plugin"
+	]
+}

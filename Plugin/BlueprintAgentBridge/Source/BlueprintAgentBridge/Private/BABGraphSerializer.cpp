@@ -13,6 +13,7 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraphNode_Comment.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "K2Node.h"
 #include "K2Node_Event.h"
 #include "K2Node_CustomEvent.h"
@@ -520,6 +521,34 @@ namespace BAB
 	// ---------------------------------------------------------------------------------------
 	// Blueprint summary
 
+	/**
+	 * The default of a member variable lives in FBPVariableDescription::DefaultValue only until the
+	 * first full compile; after that the compiler clears the string and the class default object
+	 * is the source of truth.
+	 */
+	FString VariableDefaultString(UBlueprint* BP, const FBPVariableDescription& Var)
+	{
+		if (!Var.DefaultValue.IsEmpty())
+		{
+			return Var.DefaultValue;
+		}
+		if (BP && BP->GeneratedClass)
+		{
+			if (FProperty* Property = FindFProperty<FProperty>(BP->GeneratedClass, Var.VarName))
+			{
+				if (UObject* DefaultObject = BP->GeneratedClass->GetDefaultObject(false))
+				{
+					FString Value;
+					if (FBlueprintEditorUtils::PropertyValueToString(Property, reinterpret_cast<const uint8*>(DefaultObject), Value, DefaultObject))
+					{
+						return Value;
+					}
+				}
+			}
+		}
+		return FString();
+	}
+
 	static void AppendSignatureFromGraph(UEdGraph* Graph, TArray<TSharedPtr<FJsonValue>>& Inputs, TArray<TSharedPtr<FJsonValue>>& Outputs, TArray<FString>& InputText, TArray<FString>& OutputText)
 	{
 		for (UEdGraphNode* Node : Graph->Nodes)
@@ -577,7 +606,8 @@ namespace BAB
 			TSharedRef<FJsonObject> V = NewObject();
 			V->SetStringField(TEXT("name"), Var.VarName.ToString());
 			V->SetStringField(TEXT("type"), PinTypeToString(Var.VarType));
-			if (!Var.DefaultValue.IsEmpty()) V->SetStringField(TEXT("default"), Var.DefaultValue);
+			const FString Default = VariableDefaultString(BP, Var);
+			if (!Default.IsEmpty()) V->SetStringField(TEXT("default"), Default);
 			const FString Category = Var.Category.ToString();
 			if (!Category.IsEmpty() && Category != UEdGraphSchema_K2::VR_DefaultCategory.ToString()) V->SetStringField(TEXT("category"), Category);
 			V->SetBoolField(TEXT("instance_editable"), (Var.PropertyFlags & CPF_Edit) && !(Var.PropertyFlags & CPF_DisableEditOnInstance));
@@ -728,7 +758,8 @@ namespace BAB
 			if (Var.HasMetaData(TEXT("ExposeOnSpawn")) && Var.GetMetaData(TEXT("ExposeOnSpawn")) == TEXT("true")) Flags.Add(TEXT("expose on spawn"));
 			const FString Category = Var.Category.ToString();
 			if (!Category.IsEmpty() && Category != UEdGraphSchema_K2::VR_DefaultCategory.ToString()) Flags.Add(FString::Printf(TEXT("category %s"), *Category));
-			Out += FString::Printf(TEXT("  %s : %s%s%s\n"), *Var.VarName.ToString(), *PinTypeToString(Var.VarType), Var.DefaultValue.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" = %s"), *Var.DefaultValue), Flags.Num() ? *FString::Printf(TEXT(" (%s)"), *FString::Join(Flags, TEXT(", "))) : TEXT(""));
+			const FString Default = VariableDefaultString(BP, Var);
+			Out += FString::Printf(TEXT("  %s : %s%s%s\n"), *Var.VarName.ToString(), *PinTypeToString(Var.VarType), Default.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" = %s"), *Default), Flags.Num() ? *FString::Printf(TEXT(" (%s)"), *FString::Join(Flags, TEXT(", "))) : TEXT(""));
 		}
 
 		if (BP->SimpleConstructionScript && BP->SimpleConstructionScript->GetAllNodes().Num() > 0)

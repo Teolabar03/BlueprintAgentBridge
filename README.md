@@ -90,6 +90,14 @@ Without an agent, the self test does the same against the test project:
 node mcp-server/dist/selftest.js --project test-project/BPBridgeTest.uproject
 ```
 
+A longer scripted session drives the real MCP server (stdio, like Claude Code does) and builds
+two gameplay Blueprints in [`examples/BridgeDemo`](examples/BridgeDemo/README.md), saves them and
+reloads them in a fresh editor:
+
+```bash
+node mcp-server/dist/demo.js --project examples/BridgeDemo/BridgeDemo.uproject
+```
+
 ## Using the editor instead of the headless process
 
 Start the editor with `-BABServer` (optionally `-BABPort=8765`), or enable *Auto Start Server* in

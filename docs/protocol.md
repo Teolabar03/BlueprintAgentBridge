@@ -114,7 +114,7 @@ node inserted, ...).
 | op | params | result |
 |---|---|---|
 | `bp_add_variable` | `blueprint`, `name`, `type`, `default`, `category`, `instance_editable`, `read_only`, `replicated`, `expose_on_spawn`, `private`, `tooltip` | `variable {...}`, `name`, `type` |
-| `bp_update_variable` | `blueprint`, `name`, `new_name`, `type`, `default`, flags as above | `variable {...}` |
+| `bp_update_variable` | `blueprint`, `name`, `new_name`, `type`, `default`, flags as above | `variable {...}`. Defaults are written to the class default object once the variable has been compiled (the engine clears the staging string on the first full compile) |
 | `bp_remove_variable` | `blueprint`, `name`, `force` | `usages[] {blueprint, node, title, graph}` (this Blueprint and loaded dependents), `removed`, `removed_nodes` |
 | `bp_add_local_variable` | `blueprint`, `graph` (function), `name`, `type`, `default` | `name`, `type`, `graph` |
 | `bp_add_function` | `blueprint`, `name`, `inputs[]`, `outputs[]`, `pure`, `const`, `category`, `tooltip`, `access`, `call_in_editor` | `graph`, `entry_node`, `result_node`, `text` |

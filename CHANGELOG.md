@@ -15,3 +15,10 @@ First public version.
   operation plus `bp_batch` and `bp_server`.
 - Skill for agents, documentation of the text format and the protocol, automation tests and a
   self test.
+- `examples/BridgeDemo`: a sample project whose Blueprints (`BP_RotatingPickup`, `BP_Door`) are
+  built by a scripted MCP client (`mcp-server/src/demo.ts`), saved, and reloaded in a fresh
+  headless editor; verified in commandlet, headless-server and in-editor modes.
+- Variable defaults are read from and written to the class default object once a Blueprint has
+  been compiled (the engine clears the staging string on the first full compile).
+- Template events of new Blueprints are enabled instead of duplicated; connected template nodes
+  are enabled automatically; `then (Completed)` labels on latent calls.

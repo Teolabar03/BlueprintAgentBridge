@@ -142,6 +142,14 @@ bool FBABEndToEndTest::RunTest(const FString& Parameters)
 	// Describe
 	FBABResult Describe = Run(TEXT("bp_describe_blueprint"), ParamsFor(BP, TEXT("\"format\":\"both\"")));
 	TestTrue(TEXT("describe lists Health"), Describe.bOk && Describe.Data->GetStringField(TEXT("text")).Contains(TEXT("Health")));
+	// After the full compile the default lives in the class default object; it must still be reported.
+	TestTrue(TEXT("describe shows the Health default after compile"), Describe.bOk && Describe.Data->GetStringField(TEXT("text")).Contains(TEXT("Health : float = 100")));
+	FBABResult UpdateDefault = Run(TEXT("bp_update_variable"), ParamsFor(BP, TEXT("\"name\":\"Health\",\"default\":250")));
+	if (!TestTrue(TEXT("bp_update_variable default"), UpdateDefault.bOk)) AddError(Errors(UpdateDefault));
+	FBABResult Describe2 = Run(TEXT("bp_describe_blueprint"), ParamsFor(BP, TEXT("\"format\":\"text\"")));
+	TestTrue(TEXT("describe shows the updated default"), Describe2.bOk && Describe2.Data->GetStringField(TEXT("text")).Contains(TEXT("Health : float = 250")));
+	FBABResult BadDefault = Run(TEXT("bp_update_variable"), ParamsFor(BP, TEXT("\"name\":\"Health\",\"default\":\"not a number\"")));
+	TestFalse(TEXT("invalid variable default is refused"), BadDefault.bOk);
 	TestTrue(TEXT("describe lists Heal"), Describe.bOk && Describe.Data->GetStringField(TEXT("text")).Contains(TEXT("Heal(")));
 
 	// Layout
