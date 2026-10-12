@@ -95,12 +95,12 @@ API. Porting to 5.4/5.5 should mostly be a matter of these.
 
 ## Limitations and next steps
 
-- Timelines are created, but their curves/tracks are not editable yet.
-- Component bound events (`OnComponentBeginOverlap` on a specific component) and event
-  dispatchers (creation, bind/unbind nodes) are reachable through `type: "spawner"` but have no
-  dedicated spec yet.
+- Timeline tracks are written as curves owned by the generated class (like the editor does);
+  external curve assets can be referenced only through `bp_set_node_property` for now.
+- Components are the Blueprint's own SimpleConstructionScript nodes; components inherited from a
+  C++ parent are visible to graphs but not listed or editable.
 - Widget (UMG) and Animation Blueprints load and their event graphs can be edited, but the
-  designer/anim graphs are out of scope.
+  designer/anim graphs are out of scope. User-defined struct and enum assets cannot be created yet.
 - No undo: operate on a version-controlled project. The MCP skill tells the agent to never save
   without an explicit request.
 - Level Blueprints are not supported (they live inside maps).

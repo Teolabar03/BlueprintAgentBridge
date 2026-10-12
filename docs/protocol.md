@@ -121,6 +121,31 @@ clear message. `bp_list_operations` reports the kind of each operation (`read`, 
 | `spawner` | `signature` from `bp_search_nodes` |
 | `node_class` | `node_class` (`K2Node_...`), `properties {}` applied before pins are created |
 
+### Components, class defaults, interfaces, dispatchers, timelines
+
+| op | params | result |
+|---|---|---|
+| `bp_add_component` | `blueprint`, `class`, `name`, `parent`, `properties {}`, `unique` | `name`, `class`, `parent`, `children[]`, `properties {}` (values that differ from the class defaults) |
+| `bp_get_component` | `blueprint`, `component`, `all`, `filter` | same shape |
+| `bp_set_component_property` | `blueprint`, `component`, `property` + `value` or `properties {}` | `applied[]`, `component {...}` |
+| `bp_remove_component` | `blueprint`, `component`, `force` | `usages[]`, `removed` |
+| `bp_get_class_defaults` | `blueprint`, `all`, `filter` | `class`, `defaults {}` (own variables and inherited properties that differ from the parent class) |
+| `bp_set_class_default` | `blueprint`, `property` + `value` or `properties {}` | `applied[]`, `defaults {}` |
+| `bp_add_interface` | `blueprint`, `interface` (asset path or native class) | `interface`, `functions[] {name, implemented_as}` |
+| `bp_remove_interface` | `blueprint`, `interface`, `preserve_functions` | `removed` |
+| `bp_add_event_dispatcher` | `blueprint`, `name`, `params[] {name, type}` | `dispatcher`, `signature_graph` |
+| `bp_get_timeline` | `blueprint`, `timeline` | `name, length, length_mode, auto_play, loop, replicated, ignore_time_dilation, tracks[] {name, type, keys, interp}` |
+| `bp_update_timeline` | `blueprint`, `timeline`, `length`, `length_mode`, `auto_play`, `loop`, `replicated`, `ignore_time_dilation`, `tracks[] {name, type, keys, interp}`, `remove_tracks[]` | `node`, `timeline {...}` |
+
+Property values use the same conversions as pin defaults: numbers, booleans, strings, enum entry
+names, class names and asset paths, `[x, y, z]` or `{X, Y, Z}` for structs (positional arrays map
+to the struct fields in order), nested objects for nested structs.
+
+Node specs added by this group: `component_event {component, event}`, `call_dispatcher`,
+`bind_dispatcher`, `unbind_dispatcher`, `clear_dispatcher` (`dispatcher`, optional `class`).
+To react to a dispatcher, add a `custom_event` with the same parameters and connect its
+`OutputDelegate` pin to the `Delegate` pin of a `bind_dispatcher` node.
+
 ### Variables, functions, graphs
 
 | op | params | result |

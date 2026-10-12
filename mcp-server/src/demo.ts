@@ -115,24 +115,45 @@ async function main(): Promise<void> {
   await call("bp_set_pin_default", { blueprint: door, node: select, pin: optionPins[1] ?? "Option 1", value: "Open" });
   await call("bp_auto_layout", { blueprint: door, graph: "GetStateText" });
 
-  // Event graph: Toggle -> Branch(IsOpen) -> SetActorRotation(open/closed) -> IsOpen = NOT IsOpen
+  // Components: a cube slab and a trigger box under it
+  await call("bp_add_component", { blueprint: door, class: "StaticMeshComponent", name: "DoorMesh", properties: { StaticMesh: "/Engine/BasicShapes/Cube.Cube", RelativeLocation: [0, 0, 100], RelativeScale3D: [0.1, 1.2, 2] } });
+  await call("bp_add_component", { blueprint: door, class: "BoxComponent", name: "Trigger", parent: "DoorMesh", properties: { BoxExtent: [150, 150, 100], bGenerateOverlapEvents: true } });
+  await call("bp_get_component", { blueprint: door, component: "Trigger" });
+  await call("bp_set_class_default", { blueprint: door, property: "bReplicates", value: true });
+
+  // Event dispatcher fired whenever the door toggles
+  await call("bp_add_event_dispatcher", { blueprint: door, name: "OnDoorToggled", params: [{ name: "NowOpen", type: "bool" }] });
+
+  // Timeline driving the rotation: Alpha 0 -> 1 in one second
+  const timeline = idOf(await call("bp_add_node", { blueprint: door, node: { type: "timeline", name: "DoorTimeline" } }));
+  await call("bp_update_timeline", { blueprint: door, timeline: "DoorTimeline", length: 1, tracks: [{ name: "Alpha", type: "float", keys: [[0, 0], [1, 1]], interp: "cubic" }] });
+  const lerp = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "KismetMathLibrary.Lerp" } }));
+  const angle = idOf(await call("bp_add_node", { blueprint: door, node: { type: "variable_get", variable: "OpenAngle" } }));
+  const makeDoorRot = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "MakeRotator" } }));
+  const setRot = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "SetActorRotation" }, autowire_from: `${timeline}.Update` }));
+  await call("bp_connect_pins", { blueprint: door, from: `${timeline}.Alpha`, to: `${lerp}.Alpha` });
+  await call("bp_connect_pins", { blueprint: door, from: `${angle}.OpenAngle`, to: `${lerp}.B` });
+  await call("bp_connect_pins", { blueprint: door, from: `${lerp}.ReturnValue`, to: `${makeDoorRot}.Yaw` });
+  await call("bp_connect_pins", { blueprint: door, from: `${makeDoorRot}.ReturnValue`, to: `${setRot}.NewRotation` });
+
+  // Toggle: Sequence -> [Branch(IsOpen) -> Reverse / Play the timeline] then [flip IsOpen -> broadcast OnDoorToggled]
   const toggle = idOf(await call("bp_add_node", { blueprint: door, node: { type: "custom_event", name: "Toggle" } }));
-  const branch = idOf(await call("bp_add_node", { blueprint: door, node: { type: "branch" }, autowire_from: `${toggle}.then` }));
+  const sequence = idOf(await call("bp_add_node", { blueprint: door, node: { type: "sequence" }, autowire_from: `${toggle}.then` }));
+  const branch = idOf(await call("bp_add_node", { blueprint: door, node: { type: "branch" }, autowire_from: `${sequence}.then_0` }));
   const isOpen2 = idOf(await call("bp_add_node", { blueprint: door, node: { type: "variable_get", variable: "IsOpen" } }));
   await call("bp_connect_pins", { blueprint: door, from: `${isOpen2}.IsOpen`, to: `${branch}.Condition` });
-  const closeRot = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "SetActorRotation" }, autowire_from: `${branch}.True` }));
-  const openRot = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "SetActorRotation" }, autowire_from: `${branch}.False` }));
-  const makeOpen = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "MakeRotator" } }));
-  const angle = idOf(await call("bp_add_node", { blueprint: door, node: { type: "variable_get", variable: "OpenAngle" } }));
-  await call("bp_connect_pins", { blueprint: door, from: `${angle}.OpenAngle`, to: `${makeOpen}.Yaw` });
-  await call("bp_connect_pins", { blueprint: door, from: `${makeOpen}.ReturnValue`, to: `${openRot}.NewRotation` });
-  await call("bp_set_pin_default", { blueprint: door, node: closeRot, pin: "NewRotation", value: [0, 0, 0] });
-  const setOpen = idOf(await call("bp_add_node", { blueprint: door, node: { type: "variable_set", variable: "IsOpen" } }));
-  await call("bp_connect_pins", { blueprint: door, from: `${closeRot}.then`, to: `${setOpen}.execute` });
-  await call("bp_connect_pins", { blueprint: door, from: `${openRot}.then`, to: `${setOpen}.execute` });
+  await call("bp_connect_pins", { blueprint: door, from: `${branch}.True`, to: `${timeline}.Reverse` });
+  await call("bp_connect_pins", { blueprint: door, from: `${branch}.False`, to: `${timeline}.Play` });
+  const setOpen = idOf(await call("bp_add_node", { blueprint: door, node: { type: "variable_set", variable: "IsOpen" }, autowire_from: `${sequence}.then_1` }));
   const not = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "KismetMathLibrary.Not_PreBool" } }));
   await call("bp_connect_pins", { blueprint: door, from: `${isOpen2}.IsOpen`, to: `${not}.A` });
   await call("bp_connect_pins", { blueprint: door, from: `${not}.ReturnValue`, to: `${setOpen}.IsOpen` });
+  const broadcast = idOf(await call("bp_add_node", { blueprint: door, node: { type: "call_dispatcher", dispatcher: "OnDoorToggled" }, autowire_from: `${setOpen}.then` }));
+  await call("bp_connect_pins", { blueprint: door, from: `${setOpen}.IsOpen`, to: `${broadcast}.NowOpen` });
+
+  // Walking into the trigger toggles the door
+  const overlapDoor = idOf(await call("bp_add_node", { blueprint: door, node: { type: "component_event", component: "Trigger", event: "OnComponentBeginOverlap" } }));
+  await call("bp_add_node", { blueprint: door, node: { type: "call_function", function: "self.Toggle" }, autowire_from: `${overlapDoor}.then` });
 
   // BeginPlay -> PrintString(GetStateText())
   const beginPlay = idOf(await call("bp_add_node", { blueprint: door, node: { type: "event", name: "BeginPlay" } }));
@@ -159,10 +180,13 @@ async function main(): Promise<void> {
   await call("bp_server", { action: "restart" });
   await call("bp_list_assets", { path: "/Game/Blueprints" });
   const reloaded = await call("bp_read_graph", { blueprint: door });
-  if (!reloaded.includes("Toggle") || !reloaded.includes("Set Actor Rotation")) {
-    failures++;
-    console.log("FAIL reloaded BP_Door graph does not contain the expected nodes");
+  for (const expected of ["Toggle", "Set Actor Rotation", "DoorTimeline", "> Alpha", "OnDoorToggled", "Trigger"]) {
+    if (!reloaded.includes(expected)) {
+      failures++;
+      console.log(`FAIL reloaded BP_Door graph does not contain "${expected}"`);
+    }
   }
+  await call("bp_describe_blueprint", { blueprint: door });
   const recompile = await call("bp_compile", { blueprint: pickup });
   const recompile2 = await call("bp_compile", { blueprint: door });
   for (const text of [recompile, recompile2]) {

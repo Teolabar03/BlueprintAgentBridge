@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const bridge = new Bridge(config);
   log(bridge.describe());
 
-  const server = new McpServer({ name: "blueprint-agent-bridge", version: "0.1.1" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "blueprint-agent-bridge", version: "0.2.0" }, { instructions: INSTRUCTIONS });
   registerTools(server, bridge);
 
   let disposed = false;

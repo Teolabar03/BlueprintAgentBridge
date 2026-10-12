@@ -125,8 +125,11 @@ Avoid editing while Play In Editor is running; the bridge warns when it is.
 `bp_connect_pins`, `bp_disconnect_pins`, `bp_set_pin_default`, `bp_add_pin`, `bp_remove_pin`,
 `bp_split_pin`, `bp_recombine_pin`, `bp_set_node_property`, `bp_reconstruct_node`,
 `bp_export_text`, `bp_import_text`, `bp_auto_layout`, `bp_add_variable`, `bp_update_variable`,
-`bp_remove_variable`, `bp_add_local_variable`, `bp_add_function`, `bp_remove_graph`, `bp_compile`,
-`bp_save`, `bp_undo`, `bp_redo`, `bp_batch`, `bp_server`.
+`bp_remove_variable`, `bp_add_local_variable`, `bp_add_function`, `bp_remove_graph`,
+`bp_add_component`, `bp_get_component`, `bp_set_component_property`, `bp_remove_component`,
+`bp_get_class_defaults`, `bp_set_class_default`, `bp_add_interface`, `bp_remove_interface`,
+`bp_add_event_dispatcher`, `bp_get_timeline`, `bp_update_timeline`, `bp_compile`, `bp_save`,
+`bp_undo`, `bp_redo`, `bp_batch`, `bp_server`.
 
 Full reference: [docs/protocol.md](docs/protocol.md). Text format: [docs/graph-format.md](docs/graph-format.md).
 Design: [docs/architecture.md](docs/architecture.md).
@@ -173,9 +176,10 @@ curl -s -X POST http://127.0.0.1:8765/rpc -d '{"op":"bp_read_graph","params":{"b
 
 ## Status
 
-Beta. Event graphs, functions, macros from StandardMacros, variables, components (read), casts,
-struct nodes, switches, timelines (creation only). Not covered yet: component bound events, event
-dispatcher creation, UMG designer, animation graphs, Level Blueprints. See
+Beta. Event graphs, functions, macros from StandardMacros, variables, components (add, read,
+edit, remove), component events, event dispatchers, interfaces, class defaults, casts, struct
+nodes, switches, timelines with float/vector/color/event tracks. Not covered yet: UMG designer,
+animation graphs, Level Blueprints, user-defined struct/enum assets. See
 [docs/architecture.md](docs/architecture.md#limitations-and-next-steps).
 
 ## License

@@ -55,8 +55,18 @@ Execution pins: inputs are `execute`, outputs are `then` (events only have `then
 | Spawn actor | `{"type":"spawn_actor","class":"BP_Projectile"}` |
 | Struct make / break | `{"type":"make_struct","struct":"Vector"}`, `{"type":"break_struct","struct":"Transform"}` |
 | Switch | `{"type":"switch_enum","enum":"ECollisionChannel"}`, `switch_int`, `switch_string`, `switch_name` |
-| Other | `self`, `knot`, `comment` (`text`), `make_array`, `select`, `multi_gate`, `timeline` (`name`), `get_class_defaults`, `format_text`, `input_key` (`key`) |
+| Component event | `{"type":"component_event","component":"Trigger","event":"OnComponentBeginOverlap"}` (OnComponentHit, OnComponentEndOverlap, OnClicked...) |
+| Event dispatchers | `{"type":"call_dispatcher","dispatcher":"OnOpened"}`, `bind_dispatcher`, `unbind_dispatcher`, `clear_dispatcher`; to react, connect a `custom_event` `OutputDelegate` pin to the `Delegate` pin of `bind_dispatcher` |
+| Other | `self`, `knot`, `comment` (`text`), `make_array`, `select`, `multi_gate`, `timeline` (`name`, then `bp_update_timeline` for tracks), `get_class_defaults`, `format_text`, `input_key` (`key`) |
 | Anything from search | `{"type":"spawner","signature":"..."}` or any `add_node_spec` returned by `bp_search_nodes` |
+
+## Building the actor, not just the graph
+
+- Components: `bp_add_component {class:"StaticMeshComponent", name:"DoorMesh", properties:{StaticMesh:"/Engine/BasicShapes/Cube.Cube", RelativeLocation:[0,0,50]}}`, `bp_add_component {class:"BoxComponent", name:"Trigger", parent:"DoorMesh", properties:{BoxExtent:[100,100,50]}}`. Read them back with `bp_get_component` (shows only values that differ from the defaults) and tune with `bp_set_component_property`. Component variables are usable in graphs with `variable_get`.
+- Class defaults: `bp_set_class_default {property:"bReplicates", value:true}` for inherited settings; own variables use `bp_update_variable`.
+- Event dispatchers: `bp_add_event_dispatcher {name:"OnOpened", params:[{name:"Opener", type:"object:Actor"}]}`, then call it from the graph with `call_dispatcher`.
+- Interfaces: `bp_add_interface {interface:"/Game/Blueprints/BPI_Interactable"}`; its functions without outputs become events (`{type:"event", name:"Interact"}`), the others appear as function graphs.
+- Timelines: `bp_add_node {type:"timeline", name:"DoorTimeline"}` then `bp_update_timeline {timeline:"DoorTimeline", length:1, tracks:[{name:"Alpha", type:"float", keys:[[0,0],[1,1]], interp:"cubic"}]}`; the node then has `Play`, `PlayFromStart`, `Stop`, `Reverse`, `ReverseFromEnd` inputs and `Update`, `Finished`, `Alpha` outputs.
 
 Function names: if a bare name is ambiguous the error lists the candidates as `Class.Function`; pick one. Math operators live in `KismetMathLibrary` (search "add float", "multiply vector"). Engine class names are the reflected names without prefix: `Actor`, `Pawn`, `StaticMeshComponent`; Blueprint classes by asset path or `BP_Name`.
 

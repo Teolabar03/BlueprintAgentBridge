@@ -24,9 +24,12 @@ What the agent builds:
 - `BP_RotatingPickup` (Actor): `RotationSpeed` variable; on Tick, `AddActorLocalRotation`
   with a rotator whose yaw is `DeltaSeconds * RotationSpeed`; on `ActorBeginOverlap`, cast the
   other actor to Pawn, print "Picked up!" and destroy itself.
-- `BP_Door` (Actor): `IsOpen` and `OpenAngle` variables; a pure function `GetStateText` built
-  with a Select node; a `Toggle` custom event that branches on `IsOpen`, rotates the actor to
-  the open or closed angle and flips the flag; BeginPlay prints the state.
+- `BP_Door` (Actor): a cube `DoorMesh` component with a `Trigger` box under it; `IsOpen` and
+  `OpenAngle` variables; a pure function `GetStateText` built with a Select node; an
+  `OnDoorToggled` event dispatcher; a `DoorTimeline` whose `Alpha` track drives
+  `SetActorRotation` through a Lerp; a `Toggle` custom event that plays or reverses the timeline,
+  flips `IsOpen` and broadcasts the dispatcher; walking into the trigger calls `Toggle`;
+  BeginPlay prints the state. `bReplicates` is set as a class default.
 
 Open the project in the editor afterwards to inspect the graphs: they are ordinary compiled
 Blueprints. `Binaries/`, `Intermediate/`, `Saved/` and `DerivedDataCache/` are ignored by git;

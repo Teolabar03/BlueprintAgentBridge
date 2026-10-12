@@ -55,17 +55,46 @@ namespace BAB
 	 * Reads a pin from params. Accepts either a reference field (object {node,pin} or "ID.Pin")
 	 * or the pair of fields NodeField + PinField.
 	 */
+	/** Resolves a pin reference, trying the preferred direction first (so "from" favours outputs and "to" favours inputs). */
+	static UEdGraphPin* ResolvePinRefPreferring(const FOpContext& Ctx, const TSharedPtr<FJsonValue>& Ref, const FString& PreferredDirection, FString& OutError)
+	{
+		if (!PreferredDirection.IsEmpty() && Ref.IsValid())
+		{
+			TSharedPtr<FJsonValue> Preferred;
+			if (Ref->Type == EJson::String && !Ref->AsString().Contains(TEXT(":")))
+			{
+				Preferred = MakeShared<FJsonValueString>(Ref->AsString() + TEXT(":") + PreferredDirection);
+			}
+			else if (Ref->Type == EJson::Object && !HasField(*Ref->AsObject(), TEXT("direction")) && !HasField(*Ref->AsObject(), TEXT("dir")))
+			{
+				TSharedRef<FJsonObject> Copy = MakeShared<FJsonObject>();
+				Copy->Values = Ref->AsObject()->Values;
+				Copy->SetStringField(TEXT("direction"), PreferredDirection);
+				Preferred = MakeShared<FJsonValueObject>(Copy);
+			}
+			if (Preferred.IsValid())
+			{
+				FString Ignored;
+				if (UEdGraphPin* Pin = ResolvePinRef(Ctx.Blueprint, Ctx.Graph, Preferred, Ignored))
+				{
+					return Pin;
+				}
+			}
+		}
+		return ResolvePinRef(Ctx.Blueprint, Ctx.Graph, Ref, OutError);
+	}
+
 	static UEdGraphPin* PinFromParams(const FOpContext& Ctx, const FJsonObject& Params, const TCHAR* RefField, const TCHAR* NodeField, const TCHAR* PinField, const FString& DefaultDirection, FString& OutError)
 	{
 		const FString NodeRef = GetString(Params, NodeField);
 		const TSharedPtr<FJsonValue>* Ref = Params.Values.Find(RefField);
 		if (Ref && Ref->IsValid() && (*Ref)->Type == EJson::Object)
 		{
-			return ResolvePinRef(Ctx.Blueprint, Ctx.Graph, *Ref, OutError);
+			return ResolvePinRefPreferring(Ctx, *Ref, DefaultDirection, OutError);
 		}
 		if (Ref && Ref->IsValid() && (*Ref)->Type == EJson::String && NodeRef.IsEmpty())
 		{
-			return ResolvePinRef(Ctx.Blueprint, Ctx.Graph, *Ref, OutError);
+			return ResolvePinRefPreferring(Ctx, *Ref, DefaultDirection, OutError);
 		}
 		const FString PinName = GetString(Params, PinField);
 		if (NodeRef.IsEmpty() || PinName.IsEmpty())
@@ -451,9 +480,9 @@ void BABRegisterOperations_Graph()
 		FBABResult Failure;
 		if (!ResolveContext(Params, false, Ctx, Failure)) return Failure;
 		FString Error;
-		UEdGraphPin* From = PinFromParams(Ctx, Params, TEXT("from"), TEXT("from_node"), TEXT("from_pin"), TEXT(""), Error);
+		UEdGraphPin* From = PinFromParams(Ctx, Params, TEXT("from"), TEXT("from_node"), TEXT("from_pin"), TEXT("out"), Error);
 		if (!From) return FBABResult::Fail(Error);
-		UEdGraphPin* To = PinFromParams(Ctx, Params, TEXT("to"), TEXT("to_node"), TEXT("to_pin"), TEXT(""), Error);
+		UEdGraphPin* To = PinFromParams(Ctx, Params, TEXT("to"), TEXT("to_node"), TEXT("to_pin"), TEXT("in"), Error);
 		if (!To) return FBABResult::Fail(Error);
 		if (From->Direction == EGPD_Input && To->Direction == EGPD_Output)
 		{

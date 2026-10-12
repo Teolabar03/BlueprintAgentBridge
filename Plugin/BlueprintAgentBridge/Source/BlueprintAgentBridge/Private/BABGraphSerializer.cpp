@@ -42,6 +42,12 @@
 #include "K2Node_Composite.h"
 #include "K2Node_CreateDelegate.h"
 #include "K2Node_InputKey.h"
+#include "K2Node_ComponentBoundEvent.h"
+#include "K2Node_BaseMCDelegate.h"
+#include "K2Node_CallDelegate.h"
+#include "K2Node_AddDelegate.h"
+#include "K2Node_RemoveDelegate.h"
+#include "K2Node_ClearDelegate.h"
 #include "Logging/TokenizedMessage.h"
 
 namespace BAB
@@ -96,6 +102,23 @@ namespace BAB
 			Details.SetStringField(TEXT("name"), CustomEvent->CustomFunctionName.ToString());
 			DetailText = FString::Printf(TEXT("custom_event %s"), *CustomEvent->CustomFunctionName.ToString());
 			return TEXT("custom_event");
+		}
+		if (UK2Node_ComponentBoundEvent* BoundEvent = Cast<UK2Node_ComponentBoundEvent>(Node))
+		{
+			const FString Component = BoundEvent->GetComponentPropertyName().ToString();
+			const FString Delegate = BoundEvent->DelegatePropertyName.ToString();
+			Details.SetStringField(TEXT("component"), Component);
+			Details.SetStringField(TEXT("event"), Delegate);
+			DetailText = FString::Printf(TEXT("component_event %s.%s"), *Component, *Delegate);
+			return TEXT("component_event");
+		}
+		if (UK2Node_BaseMCDelegate* DelegateNode = Cast<UK2Node_BaseMCDelegate>(Node))
+		{
+			const TCHAR* Kind = Node->IsA<UK2Node_CallDelegate>() ? TEXT("call_dispatcher") : (Node->IsA<UK2Node_AddDelegate>() ? TEXT("bind_dispatcher") : (Node->IsA<UK2Node_RemoveDelegate>() ? TEXT("unbind_dispatcher") : (Node->IsA<UK2Node_ClearDelegate>() ? TEXT("clear_dispatcher") : TEXT("dispatcher"))));
+			const FString Dispatcher = DelegateNode->GetPropertyName().ToString();
+			Details.SetStringField(TEXT("dispatcher"), Dispatcher);
+			DetailText = FString::Printf(TEXT("%s %s"), Kind, *Dispatcher);
+			return Kind;
 		}
 		if (UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
 		{
@@ -725,12 +748,22 @@ namespace BAB
 		SetStringArray(*Json, TEXT("interfaces"), Interfaces);
 
 		// Timelines
-		TArray<FString> Timelines;
+		TArray<TSharedPtr<FJsonValue>> Timelines;
 		for (UTimelineTemplate* Timeline : BP->Timelines)
 		{
-			if (Timeline) Timelines.Add(Timeline->GetVariableName().ToString());
+			if (!Timeline) continue;
+			TSharedRef<FJsonObject> T = NewObject();
+			T->SetStringField(TEXT("name"), Timeline->GetVariableName().ToString());
+			T->SetNumberField(TEXT("length"), Timeline->TimelineLength);
+			TArray<FString> Tracks;
+			for (const FTTFloatTrack& Track : Timeline->FloatTracks) Tracks.Add(Track.GetTrackName().ToString() + TEXT(" (float)"));
+			for (const FTTVectorTrack& Track : Timeline->VectorTracks) Tracks.Add(Track.GetTrackName().ToString() + TEXT(" (vector)"));
+			for (const FTTLinearColorTrack& Track : Timeline->LinearColorTracks) Tracks.Add(Track.GetTrackName().ToString() + TEXT(" (linear_color)"));
+			for (const FTTEventTrack& Track : Timeline->EventTracks) Tracks.Add(Track.GetTrackName().ToString() + TEXT(" (event)"));
+			SetStringArray(*T, TEXT("tracks"), Tracks);
+			Timelines.Add(ObjectValue(T));
 		}
-		SetStringArray(*Json, TEXT("timelines"), Timelines);
+		Json->SetArrayField(TEXT("timelines"), Timelines);
 
 		return Json;
 	}
@@ -820,8 +853,17 @@ namespace BAB
 		if (BP->Timelines.Num() > 0)
 		{
 			TArray<FString> Names;
-			for (UTimelineTemplate* Timeline : BP->Timelines) if (Timeline) Names.Add(Timeline->GetVariableName().ToString());
-			Out += FString::Printf(TEXT("Timelines: %s\n"), *FString::Join(Names, TEXT(", ")));
+			for (UTimelineTemplate* Timeline : BP->Timelines)
+			{
+				if (!Timeline) continue;
+				TArray<FString> Tracks;
+				for (const FTTFloatTrack& Track : Timeline->FloatTracks) Tracks.Add(Track.GetTrackName().ToString());
+				for (const FTTVectorTrack& Track : Timeline->VectorTracks) Tracks.Add(Track.GetTrackName().ToString());
+				for (const FTTLinearColorTrack& Track : Timeline->LinearColorTracks) Tracks.Add(Track.GetTrackName().ToString());
+				for (const FTTEventTrack& Track : Timeline->EventTracks) Tracks.Add(Track.GetTrackName().ToString());
+				Names.Add(FString::Printf(TEXT("%s (%.2fs%s)"), *Timeline->GetVariableName().ToString(), Timeline->TimelineLength, Tracks.Num() ? *FString::Printf(TEXT(", tracks: %s"), *FString::Join(Tracks, TEXT(", "))) : TEXT("")));
+			}
+			Out += FString::Printf(TEXT("Timelines: %s\n"), *FString::Join(Names, TEXT("; ")));
 		}
 		return Out;
 	}

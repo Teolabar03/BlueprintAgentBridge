@@ -265,4 +265,108 @@ bool FBABBranchAndMacroTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBABActorBuildingTest, "BlueprintAgentBridge.Actor.ComponentsDispatchersInterfacesTimelines", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FBABActorBuildingTest::RunTest(const FString& Parameters)
+{
+	using namespace BABTest;
+	const FString Path = TEXT("/Game/BABTests");
+	const FString Name = UniqueName(TEXT("BP_BABActor"));
+	const FString BP = Path + TEXT("/") + Name;
+	FBABResult Create = Run(TEXT("bp_create_blueprint"), FString::Printf(TEXT("{\"path\":\"%s\",\"name\":\"%s\",\"parent_class\":\"Actor\"}"), *Path, *Name));
+	if (!TestTrue(TEXT("create actor"), Create.bOk)) { AddError(Errors(Create)); return false; }
+
+	// Components
+	FBABResult Mesh = Run(TEXT("bp_add_component"), ParamsFor(BP, TEXT("\"class\":\"StaticMeshComponent\",\"name\":\"DoorMesh\",\"properties\":{\"RelativeLocation\":[0,0,50]}")));
+	if (!TestTrue(TEXT("add StaticMeshComponent"), Mesh.bOk)) AddError(Errors(Mesh));
+	FBABResult Trigger = Run(TEXT("bp_add_component"), ParamsFor(BP, TEXT("\"class\":\"BoxComponent\",\"name\":\"Trigger\",\"parent\":\"DoorMesh\",\"properties\":{\"BoxExtent\":[100,100,50],\"bGenerateOverlapEvents\":true}")));
+	if (!TestTrue(TEXT("add BoxComponent under DoorMesh"), Trigger.bOk)) AddError(Errors(Trigger));
+	TestEqual(TEXT("trigger parent"), Trigger.Data->GetStringField(TEXT("parent")), FString(TEXT("DoorMesh")));
+	FBABResult GetTrigger = Run(TEXT("bp_get_component"), ParamsFor(BP, TEXT("\"component\":\"Trigger\"")));
+	const TSharedPtr<FJsonObject>* TriggerProps = nullptr;
+	const bool bHasExtent = GetTrigger.bOk && GetTrigger.Data->TryGetObjectField(TEXT("properties"), TriggerProps) && TriggerProps && (*TriggerProps)->HasField(TEXT("BoxExtent"));
+	TestTrue(TEXT("BoxExtent reported as modified"), bHasExtent);
+	if (bHasExtent) TestTrue(TEXT("BoxExtent value"), (*TriggerProps)->GetStringField(TEXT("BoxExtent")).StartsWith(TEXT("100.0")));
+	FBABResult SetProp = Run(TEXT("bp_set_component_property"), ParamsFor(BP, TEXT("\"component\":\"DoorMesh\",\"property\":\"RelativeScale3D\",\"value\":[1,2,3]")));
+	TestTrue(TEXT("set component property"), SetProp.bOk);
+	FBABResult DupComponent = Run(TEXT("bp_add_component"), ParamsFor(BP, TEXT("\"class\":\"BoxComponent\",\"name\":\"Trigger\"")));
+	TestFalse(TEXT("duplicate component name refused"), DupComponent.bOk);
+
+	// Component bound event
+	FBABResult Overlap = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"component_event\",\"component\":\"Trigger\",\"event\":\"OnComponentBeginOverlap\"}")));
+	if (!TestTrue(TEXT("component event"), Overlap.bOk)) AddError(Errors(Overlap));
+	TestTrue(TEXT("component event has OtherActor pin"), Overlap.bOk && Overlap.Data->GetStringField(TEXT("text")).Contains(TEXT("OtherActor")));
+	FBABResult OverlapAgain = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"component_event\",\"component\":\"Trigger\",\"event\":\"OnComponentBeginOverlap\"}")));
+	TestFalse(TEXT("duplicate component event refused"), OverlapAgain.bOk);
+
+	// Event dispatcher + call/bind nodes
+	FBABResult Dispatcher = Run(TEXT("bp_add_event_dispatcher"), ParamsFor(BP, TEXT("\"name\":\"OnOpened\",\"params\":[{\"name\":\"Opener\",\"type\":\"object:Actor\"}]")));
+	if (!TestTrue(TEXT("add event dispatcher"), Dispatcher.bOk)) AddError(Errors(Dispatcher));
+	FBABResult CallDispatcher = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"call_dispatcher\",\"dispatcher\":\"OnOpened\"}")));
+	if (!TestTrue(TEXT("call dispatcher node"), CallDispatcher.bOk)) AddError(Errors(CallDispatcher));
+	TestTrue(TEXT("call node exposes the Opener param"), CallDispatcher.bOk && CallDispatcher.Data->GetStringField(TEXT("text")).Contains(TEXT("Opener")));
+	FBABResult Bind = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"bind_dispatcher\",\"dispatcher\":\"OnOpened\"}")));
+	TestTrue(TEXT("bind dispatcher node"), Bind.bOk);
+	FBABResult CustomEvent = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"custom_event\",\"name\":\"HandleOpened\",\"inputs\":[{\"name\":\"Opener\",\"type\":\"object:Actor\"}]}")));
+	TestTrue(TEXT("custom event for binding"), CustomEvent.bOk);
+	if (Bind.bOk && CustomEvent.bOk)
+	{
+		FBABResult Wire = Run(TEXT("bp_connect_pins"), ParamsFor(BP, FString::Printf(TEXT("\"from\":\"%s.OutputDelegate\",\"to\":\"%s.Delegate\""), *CustomEvent.Data->GetStringField(TEXT("id")), *Bind.Data->GetStringField(TEXT("id")))));
+		if (!TestTrue(TEXT("custom event delegate -> bind"), Wire.bOk)) AddError(Errors(Wire));
+	}
+
+	// Interface created on the fly and implemented
+	const FString InterfaceName = UniqueName(TEXT("BPI_Test"));
+	FBABResult Interface = Run(TEXT("bp_create_blueprint"), FString::Printf(TEXT("{\"path\":\"%s\",\"name\":\"%s\",\"blueprint_type\":\"interface\"}"), *Path, *InterfaceName));
+	if (!TestTrue(TEXT("create interface"), Interface.bOk)) AddError(Errors(Interface));
+	FBABResult InterfaceFn = Run(TEXT("bp_add_function"), ParamsFor(Path + TEXT("/") + InterfaceName, TEXT("\"name\":\"Interact\",\"inputs\":[{\"name\":\"Instigator\",\"type\":\"object:Actor\"}]")));
+	if (!TestTrue(TEXT("interface function"), InterfaceFn.bOk)) AddError(Errors(InterfaceFn));
+	FBABResult CompileInterface = Run(TEXT("bp_compile"), ParamsFor(Path + TEXT("/") + InterfaceName, TEXT("")));
+	TestTrue(TEXT("interface compiles"), CompileInterface.bOk);
+	FBABResult Implement = Run(TEXT("bp_add_interface"), ParamsFor(BP, FString::Printf(TEXT("\"interface\":\"%s\""), *(Path + TEXT("/") + InterfaceName))));
+	if (!TestTrue(TEXT("implement interface"), Implement.bOk)) AddError(Errors(Implement));
+	FBABResult InteractEvent = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"event\",\"name\":\"Interact\"}")));
+	if (!TestTrue(TEXT("interface event placed"), InteractEvent.bOk)) AddError(Errors(InteractEvent));
+
+	// Timeline with a float track
+	FBABResult Timeline = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"timeline\",\"name\":\"DoorTimeline\"}")));
+	if (!TestTrue(TEXT("timeline node"), Timeline.bOk)) AddError(Errors(Timeline));
+	FBABResult Tracks = Run(TEXT("bp_update_timeline"), ParamsFor(BP, TEXT("\"timeline\":\"DoorTimeline\",\"length\":1.5,\"tracks\":[{\"name\":\"Alpha\",\"type\":\"float\",\"keys\":[[0,0],[1.5,1]],\"interp\":\"cubic\"},{\"name\":\"Offset\",\"type\":\"vector\",\"keys\":[[0,[0,0,0]],[1.5,[0,0,100]]]}]")));
+	if (!TestTrue(TEXT("timeline tracks"), Tracks.bOk)) AddError(Errors(Tracks));
+	FBABResult TimelineNode = Run(TEXT("bp_get_node"), ParamsFor(BP, TEXT("\"node\":\"DoorTimeline\"")));
+	TestTrue(TEXT("timeline node exposes Alpha pin"), TimelineNode.bOk && TimelineNode.Data->GetStringField(TEXT("text")).Contains(TEXT("> Alpha")));
+	TestTrue(TEXT("timeline node exposes Offset pin"), TimelineNode.bOk && TimelineNode.Data->GetStringField(TEXT("text")).Contains(TEXT("> Offset")));
+	FBABResult GetTimeline = Run(TEXT("bp_get_timeline"), ParamsFor(BP, TEXT("\"timeline\":\"DoorTimeline\"")));
+	TestTrue(TEXT("timeline length"), GetTimeline.bOk && FMath::IsNearlyEqual((float)GetTimeline.Data->GetNumberField(TEXT("length")), 1.5f));
+
+	// Class defaults
+	FBABResult SetDefault = Run(TEXT("bp_set_class_default"), ParamsFor(BP, TEXT("\"property\":\"bReplicates\",\"value\":true")));
+	if (!TestTrue(TEXT("set class default"), SetDefault.bOk)) AddError(Errors(SetDefault));
+	FBABResult GetDefaults = Run(TEXT("bp_get_class_defaults"), ParamsFor(BP, TEXT("")));
+	const TSharedPtr<FJsonObject>* Defaults = nullptr;
+	TestTrue(TEXT("bReplicates listed as modified"), GetDefaults.bOk && GetDefaults.Data->TryGetObjectField(TEXT("defaults"), Defaults) && Defaults && (*Defaults)->HasField(TEXT("bReplicates")));
+
+	// Everything must compile
+	FBABResult Compile = Run(TEXT("bp_compile"), ParamsFor(BP, TEXT("")));
+	if (!TestTrue(TEXT("actor compiles"), Compile.bOk)) AddError(Errors(Compile));
+	if (Compile.bOk) TestEqual(TEXT("no errors"), (int32)Compile.Data->GetNumberField(TEXT("num_errors")), 0);
+
+	// Describe mentions everything
+	FBABResult Describe = Run(TEXT("bp_describe_blueprint"), ParamsFor(BP, TEXT("")));
+	const FString Text = Describe.Data->GetStringField(TEXT("text"));
+	TestTrue(TEXT("describe lists Trigger"), Text.Contains(TEXT("Trigger : BoxComponent")));
+	TestTrue(TEXT("describe lists OnOpened"), Text.Contains(TEXT("OnOpened")));
+	TestTrue(TEXT("describe lists the interface"), Text.Contains(InterfaceName));
+	TestTrue(TEXT("describe lists the timeline track"), Text.Contains(TEXT("Alpha")));
+
+	// Remove the component that the overlap event uses: refused, then forced
+	FBABResult RemoveTrigger = Run(TEXT("bp_remove_component"), ParamsFor(BP, TEXT("\"component\":\"Trigger\"")));
+	TestFalse(TEXT("removing a used component is refused"), RemoveTrigger.bOk);
+	FBABResult RemoveTriggerForced = Run(TEXT("bp_remove_component"), ParamsFor(BP, TEXT("\"component\":\"Trigger\",\"force\":true")));
+	TestTrue(TEXT("forced component removal"), RemoveTriggerForced.bOk);
+	FBABResult Compile2 = Run(TEXT("bp_compile"), ParamsFor(BP, TEXT("")));
+	TestTrue(TEXT("compiles after component removal"), Compile2.bOk && (int32)Compile2.Data->GetNumberField(TEXT("num_errors")) == 0);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

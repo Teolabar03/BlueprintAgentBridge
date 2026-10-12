@@ -36,12 +36,15 @@ const nodeSpec = z
     type: z
       .string()
       .describe(
-        "call_function | event | custom_event | variable_get | variable_set | branch | sequence | multi_gate | macro | cast | class_cast | spawn_actor | knot | comment | self | make_array | make_struct | break_struct | select | switch_enum | switch_int | switch_string | switch_name | timeline | get_class_defaults | format_text | input_key | spawner | node_class"
+        "call_function | event | custom_event | component_event | variable_get | variable_set | branch | sequence | multi_gate | macro | cast | class_cast | spawn_actor | knot | comment | self | make_array | make_struct | break_struct | select | switch_enum | switch_int | switch_string | switch_name | timeline | get_class_defaults | format_text | input_key | call_dispatcher | bind_dispatcher | unbind_dispatcher | clear_dispatcher | spawner | node_class"
       ),
     function: z.string().optional().describe('For call_function: "PrintString", "KismetSystemLibrary.PrintString" or "self.MyFunction".'),
-    name: z.string().optional().describe("Event name (BeginPlay, Tick, ActorBeginOverlap...), custom event name, timeline name, or input key."),
-    class: z.string().optional().describe("Class for event owner, cast target, spawn_actor, get_class_defaults, variable owner (defaults to self)."),
+    name: z.string().optional().describe("Event name (BeginPlay, Tick, ActorBeginOverlap, an interface function...), custom event name, timeline name, or input key."),
+    class: z.string().optional().describe("Class for event owner, cast target, spawn_actor, get_class_defaults, variable or dispatcher owner (defaults to self)."),
     variable: z.string().optional().describe("Variable name for variable_get / variable_set."),
+    component: z.string().optional().describe("Component name for component_event (e.g. Trigger)."),
+    event: z.string().optional().describe("Delegate name for component_event (OnComponentBeginOverlap, OnComponentHit, OnClicked...)."),
+    dispatcher: z.string().optional().describe("Event dispatcher name for call_dispatcher / bind_dispatcher / unbind_dispatcher / clear_dispatcher."),
     macro: z.string().optional().describe("Macro name for type=macro (ForEachLoop, ForLoop, WhileLoop, DoOnce, Gate, FlipFlop, IsValid, DoN...)."),
     library: z.string().optional().describe("Macro library asset path when the macro is not in StandardMacros or this Blueprint."),
     struct: z.string().optional().describe("Struct name for make_struct / break_struct (Vector, Rotator, Transform, LinearColor...)."),
@@ -380,6 +383,97 @@ export const TOOLS: ToolDef[] = [
     description: "Remove a function, macro or event dispatcher graph. Fails and lists call sites unless force=true.",
     input: { blueprint, graph: z.string(), force: z.boolean().optional() },
     destructive: true,
+  },
+  {
+    name: "bp_add_component",
+    description: "Add a component to an Actor Blueprint: class (StaticMeshComponent, BoxComponent, PointLightComponent...), name, optional parent and initial properties ({RelativeLocation:[0,0,50], StaticMesh:\"/Engine/BasicShapes/Cube.Cube\"}). Scene components attach to the root unless parent is given.",
+    input: {
+      blueprint,
+      class: z.string(),
+      name: z.string().optional(),
+      parent: z.string().optional().describe("Name of the component to attach to"),
+      properties: z.record(z.any()).optional(),
+      unique: z.boolean().optional().describe("Auto-rename when the name is taken"),
+    },
+    format: (r) => `component ${str(r.name)} (${str(r.class)})${r.parent ? ` under ${str(r.parent)}` : ""}\nproperties: ${jsonBlock(r.properties ?? {})}`,
+  },
+  {
+    name: "bp_get_component",
+    description: "Read a component: class, parent, children and the properties that differ from the class defaults (all=true lists every editable property, filter narrows by name).",
+    input: { blueprint, component: z.string(), all: z.boolean().optional(), filter: z.string().optional() },
+    readOnly: true,
+  },
+  {
+    name: "bp_set_component_property",
+    description: "Set properties on a component template: property + value, or a properties object (RelativeLocation, RelativeRotation, StaticMesh, BoxExtent, bGenerateOverlapEvents, Intensity...). Vectors as [x,y,z], assets as paths.",
+    input: { blueprint, component: z.string(), property: z.string().optional(), value: z.any().optional(), properties: z.record(z.any()).optional() },
+    format: (r) => `applied: ${((r.applied as string[]) ?? []).join(", ")}\n${jsonBlock((r.component as Json)?.properties ?? {})}`,
+  },
+  {
+    name: "bp_remove_component",
+    description: "Remove a component (children are re-parented). Fails and lists the graph nodes that use it unless force=true.",
+    input: { blueprint, component: z.string(), force: z.boolean().optional() },
+    destructive: true,
+  },
+  {
+    name: "bp_get_class_defaults",
+    description: "Class default values of the Blueprint: own variables plus inherited properties that differ from the parent (all=true for everything editable; filter by name).",
+    input: { blueprint, all: z.boolean().optional(), filter: z.string().optional() },
+    readOnly: true,
+  },
+  {
+    name: "bp_set_class_default",
+    description: "Set class default values (bReplicates, InitialLifeSpan, AutoReceiveInput, inherited variables...): property + value, or a properties object. Requires a compiled Blueprint.",
+    input: { blueprint, property: z.string().optional(), value: z.any().optional(), properties: z.record(z.any()).optional() },
+    format: (r) => `applied: ${((r.applied as string[]) ?? []).join(", ")}\n${jsonBlock(r.defaults ?? {})}`,
+  },
+  {
+    name: "bp_add_interface",
+    description: "Implement a Blueprint interface (asset path) or a native interface. Interface functions with outputs become function graphs; the others become events to add with bp_add_node type=event.",
+    input: { blueprint, interface: z.string() },
+  },
+  {
+    name: "bp_remove_interface",
+    description: "Remove an implemented interface (preserve_functions=true keeps the graphs as plain functions).",
+    input: { blueprint, interface: z.string(), preserve_functions: z.boolean().optional() },
+    destructive: true,
+  },
+  {
+    name: "bp_add_event_dispatcher",
+    description: "Add an event dispatcher (multicast delegate) with optional params. Then use node types call_dispatcher, bind_dispatcher (connect a custom event OutputDelegate pin to its Event pin), unbind_dispatcher.",
+    input: { blueprint, name: z.string(), params: paramList },
+  },
+  {
+    name: "bp_get_timeline",
+    description: "Read a timeline: length, flags and tracks with keys.",
+    input: { blueprint, timeline: z.string() },
+    readOnly: true,
+  },
+  {
+    name: "bp_update_timeline",
+    description: 'Edit a timeline created with bp_add_node type=timeline: length, auto_play, loop, and tracks [{name, type: float|vector|linear_color|event, keys: [[time, value], ...] (vectors: [time,[x,y,z]]), interp: linear|cubic|constant}]. Each track becomes an output pin of the timeline node.',
+    input: {
+      blueprint,
+      timeline: z.string(),
+      length: z.number().optional(),
+      length_mode: z.enum(["timeline_length", "last_keyframe"]).optional(),
+      auto_play: z.boolean().optional(),
+      loop: z.boolean().optional(),
+      replicated: z.boolean().optional(),
+      ignore_time_dilation: z.boolean().optional(),
+      tracks: z
+        .array(
+          z.object({
+            name: z.string(),
+            type: z.enum(["float", "vector", "linear_color", "event"]).optional(),
+            keys: z.array(z.any()).optional(),
+            interp: z.enum(["linear", "cubic", "constant"]).optional(),
+          })
+        )
+        .optional(),
+      remove_tracks: z.array(z.string()).optional(),
+    },
+    format: (r) => jsonBlock(r.timeline ?? r),
   },
   {
     name: "bp_undo",

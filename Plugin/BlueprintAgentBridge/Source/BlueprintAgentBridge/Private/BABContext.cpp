@@ -10,6 +10,7 @@
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraphSchema_K2.h"
 #include "K2Node.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/ARFilter.h"
@@ -410,6 +411,21 @@ namespace BAB
 				for (UEdGraphPin* Pin : Node->Pins)
 				{
 					if (Pin && DirectionOk(Pin) && Pin->PinName == Alias) Matches.Add(Pin);
+				}
+			}
+		}
+		// Pass 5: the output of a variable Set node is called Output_Get; accept the variable name with direction out.
+		if (Matches.Num() == 0 && WantedDirection == EGPD_Output)
+		{
+			if (UK2Node_VariableSet* SetNode = Cast<UK2Node_VariableSet>(Node))
+			{
+				if (SetNode->GetVarNameString().Equals(PinName, ESearchCase::IgnoreCase) || SetNode->GetVarNameString().Replace(TEXT(" "), TEXT("")).Equals(Compact, ESearchCase::IgnoreCase))
+				{
+					// UK2Node_VariableSet::GetVariableOutputPinName() is not exported; the name is fixed in the engine.
+					if (UEdGraphPin* OutputPin = SetNode->FindPin(FName(TEXT("Output_Get")), EGPD_Output))
+					{
+						Matches.Add(OutputPin);
+					}
 				}
 			}
 		}
@@ -1126,6 +1142,19 @@ namespace BAB
 		case EJson::Array:
 		{
 			TArray<FString> Items;
+			if (StructHint)
+			{
+				// Positional struct literal: [1, 2, 3] -> (X=1,Y=2,Z=3)
+				int32 Index = 0;
+				const TArray<TSharedPtr<FJsonValue>>& Array = Value->AsArray();
+				for (TFieldIterator<FProperty> It(StructHint); It && Index < Array.Num(); ++It, ++Index)
+				{
+					const UStruct* Inner = nullptr;
+					if (const FStructProperty* StructProp = CastField<FStructProperty>(*It)) Inner = StructProp->Struct;
+					Items.Add(FString::Printf(TEXT("%s=%s"), *It->GetName(), *JsonValueToUEStringInternal(Array[Index], Inner, true)));
+				}
+				return FString::Printf(TEXT("(%s)"), *FString::Join(Items, TEXT(",")));
+			}
 			for (const TSharedPtr<FJsonValue>& Item : Value->AsArray())
 			{
 				Items.Add(JsonValueToUEStringInternal(Item, nullptr, true));

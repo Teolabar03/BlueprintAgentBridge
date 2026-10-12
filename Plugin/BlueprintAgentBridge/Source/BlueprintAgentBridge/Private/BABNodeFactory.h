@@ -29,6 +29,8 @@ namespace BAB
 	/** Finds an action-database spawner by the signature string returned by bp_search_nodes. */
 	UBlueprintNodeSpawner* FindSpawnerBySignature(const FString& Signature, UObject** OutOwner);
 
+	/** Sets a reflected property on any object from a JSON value (class names and asset paths are resolved). */
+	bool ApplyObjectProperty(UObject* Object, const FString& PropertyName, const TSharedPtr<FJsonValue>& Value, FString& OutError, FProperty** OutProperty = nullptr);
 	/** Sets a reflected property on a node from a JSON value (class names and asset paths are resolved). */
 	bool ApplyNodeProperty(UEdGraphNode* Node, const FString& PropertyName, const TSharedPtr<FJsonValue>& Value, FString& OutError);
 

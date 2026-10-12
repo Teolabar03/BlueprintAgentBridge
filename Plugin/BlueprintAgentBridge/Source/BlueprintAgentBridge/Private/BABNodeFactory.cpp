@@ -12,6 +12,8 @@
 #include "EdGraphSchema_K2.h"
 #include "EdGraphNode_Comment.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Engine/SCS_Node.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_CallParentFunction.h"
 #include "K2Node_Event.h"
@@ -36,9 +38,17 @@
 #include "K2Node_SwitchString.h"
 #include "K2Node_SwitchName.h"
 #include "K2Node_Timeline.h"
+#include "Engine/TimelineTemplate.h"
 #include "K2Node_GetClassDefaults.h"
 #include "K2Node_FormatText.h"
 #include "K2Node_InputKey.h"
+#include "K2Node_ComponentBoundEvent.h"
+#include "K2Node_CallDelegate.h"
+#include "K2Node_AddDelegate.h"
+#include "K2Node_RemoveDelegate.h"
+#include "K2Node_ClearDelegate.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "Components/ActorComponent.h"
 #include "BlueprintActionDatabase.h"
 #include "BlueprintNodeSpawner.h"
 #include "UObject/UObjectIterator.h"
@@ -81,8 +91,32 @@ namespace BAB
 			TEXT("branch"), TEXT("sequence"), TEXT("multi_gate"), TEXT("macro"), TEXT("cast"), TEXT("class_cast"), TEXT("spawn_actor"),
 			TEXT("knot"), TEXT("comment"), TEXT("self"), TEXT("make_array"), TEXT("make_struct"), TEXT("break_struct"), TEXT("select"),
 			TEXT("switch_enum"), TEXT("switch_int"), TEXT("switch_string"), TEXT("switch_name"), TEXT("timeline"),
-			TEXT("get_class_defaults"), TEXT("format_text"), TEXT("input_key"), TEXT("spawner"), TEXT("node_class")
+			TEXT("get_class_defaults"), TEXT("format_text"), TEXT("input_key"), TEXT("component_event"),
+			TEXT("call_dispatcher"), TEXT("bind_dispatcher"), TEXT("unbind_dispatcher"), TEXT("clear_dispatcher"),
+			TEXT("spawner"), TEXT("node_class")
 		};
+	}
+
+	/** Multicast delegate property ("event dispatcher") on a class, by name, "On"-prefixed name or display name. */
+	static FMulticastDelegateProperty* FindDispatcherProperty(UClass* Class, const FString& Name, FString& OutError)
+	{
+		if (!Class) return nullptr;
+		const FString Compact = Name.Replace(TEXT(" "), TEXT(""));
+		for (TFieldIterator<FMulticastDelegateProperty> It(Class); It; ++It)
+		{
+			const FString PropName = It->GetName();
+			if (PropName.Equals(Compact, ESearchCase::IgnoreCase) || PropName.Equals(TEXT("On") + Compact, ESearchCase::IgnoreCase) || It->GetDisplayNameText().ToString().Replace(TEXT(" "), TEXT("")).Equals(Compact, ESearchCase::IgnoreCase))
+			{
+				return *It;
+			}
+		}
+		TArray<FString> Available;
+		for (TFieldIterator<FMulticastDelegateProperty> It(Class); It && Available.Num() < 60; ++It)
+		{
+			if (It->HasAnyPropertyFlags(CPF_BlueprintAssignable)) Available.Add(It->GetName());
+		}
+		OutError = FString::Printf(TEXT("No event dispatcher \"%s\" on %s. Available: %s"), *Name, *ClassDisplayName(Class), *FString::Join(Available, TEXT(", ")));
+		return nullptr;
 	}
 
 	UFunction* ResolveEventFunction(UBlueprint* BP, const FString& InName, const FString& ClassName, FString& OutError)
@@ -212,17 +246,23 @@ namespace BAB
 
 	bool ApplyNodeProperty(UEdGraphNode* Node, const FString& PropertyName, const TSharedPtr<FJsonValue>& Value, FString& OutError)
 	{
-		if (!Node)
+		return ApplyObjectProperty(Node, PropertyName, Value, OutError, nullptr);
+	}
+
+	bool ApplyObjectProperty(UObject* Object, const FString& PropertyName, const TSharedPtr<FJsonValue>& Value, FString& OutError, FProperty** OutProperty)
+	{
+		if (!Object)
 		{
-			OutError = TEXT("No node.");
+			OutError = TEXT("No object.");
 			return false;
 		}
-		FProperty* Property = Node->GetClass()->FindPropertyByName(FName(*PropertyName));
+		FProperty* Property = Object->GetClass()->FindPropertyByName(FName(*PropertyName));
 		if (!Property)
 		{
-			for (TFieldIterator<FProperty> It(Node->GetClass()); It; ++It)
+			const FString Compact = PropertyName.Replace(TEXT(" "), TEXT(""));
+			for (TFieldIterator<FProperty> It(Object->GetClass()); It; ++It)
 			{
-				if (It->GetName().Equals(PropertyName, ESearchCase::IgnoreCase))
+				if (It->GetName().Equals(PropertyName, ESearchCase::IgnoreCase) || It->GetDisplayNameText().ToString().Replace(TEXT(" "), TEXT("")).Equals(Compact, ESearchCase::IgnoreCase))
 				{
 					Property = *It;
 					break;
@@ -232,15 +272,17 @@ namespace BAB
 		if (!Property)
 		{
 			TArray<FString> Names;
-			for (TFieldIterator<FProperty> It(Node->GetClass()); It; ++It)
+			const bool bIsNode = Object->IsA<UEdGraphNode>();
+			for (TFieldIterator<FProperty> It(Object->GetClass()); It && Names.Num() < 120; ++It)
 			{
-				if (It->GetOwnerClass() && !It->GetOwnerClass()->IsChildOf(UEdGraphNode::StaticClass()) ) continue;
-				if (It->GetOwnerClass() == UEdGraphNode::StaticClass()) continue;
+				if (bIsNode && It->GetOwnerClass() == UEdGraphNode::StaticClass()) continue;
+				if (!bIsNode && !It->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)) continue;
 				Names.Add(It->GetName());
 			}
-			OutError = FString::Printf(TEXT("Property \"%s\" not found on %s. Node properties: %s"), *PropertyName, *Node->GetClass()->GetName(), *FString::Join(Names, TEXT(", ")));
+			OutError = FString::Printf(TEXT("Property \"%s\" not found on %s. Properties: %s"), *PropertyName, *Object->GetClass()->GetName(), *FString::Join(Names, TEXT(", ")));
 			return false;
 		}
+		if (OutProperty) *OutProperty = Property;
 
 		FString Text;
 		if (FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
@@ -258,21 +300,21 @@ namespace BAB
 			}
 			else
 			{
-				UObject* Object = FindObject<UObject>(nullptr, *AsString);
-				if (!Object) Object = StaticLoadObject(UObject::StaticClass(), nullptr, *AsString, nullptr, LOAD_NoWarn, nullptr);
-				if (!Object)
+				UObject* Found = FindObject<UObject>(nullptr, *AsString);
+				if (!Found) Found = StaticLoadObject(UObject::StaticClass(), nullptr, *AsString, nullptr, LOAD_NoWarn, nullptr);
+				if (!Found)
 				{
 					// maybe a struct or enum name used for StructType / Enum properties
 					FString Ignored;
-					if (ObjectProperty->PropertyClass == UScriptStruct::StaticClass()) Object = ResolveStruct(AsString, Ignored);
-					else if (ObjectProperty->PropertyClass == UEnum::StaticClass()) Object = ResolveEnum(AsString, Ignored);
+					if (ObjectProperty->PropertyClass == UScriptStruct::StaticClass()) Found = ResolveStruct(AsString, Ignored);
+					else if (ObjectProperty->PropertyClass == UEnum::StaticClass()) Found = ResolveEnum(AsString, Ignored);
 				}
-				if (!Object)
+				if (!Found)
 				{
 					OutError = FString::Printf(TEXT("Object not found for property %s: %s"), *PropertyName, *AsString);
 					return false;
 				}
-				Text = Object->GetPathName();
+				Text = Found->GetPathName();
 			}
 		}
 		else if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
@@ -284,8 +326,8 @@ namespace BAB
 			Text = JsonValueToUEString(Value, nullptr);
 		}
 
-		Node->Modify();
-		const TCHAR* Result = Property->ImportText_Direct(*Text, Property->ContainerPtrToValuePtr<void>(Node), Node, PPF_None);
+		Object->Modify();
+		const TCHAR* Result = Property->ImportText_Direct(*Text, Property->ContainerPtrToValuePtr<void>(Object), Object, PPF_None);
 		if (!Result)
 		{
 			OutError = FString::Printf(TEXT("Could not parse \"%s\" for property %s (%s)."), *Text, *PropertyName, *Property->GetCPPType());
@@ -641,16 +683,38 @@ namespace BAB
 				if (OutError.IsEmpty()) OutError = TEXT("This Blueprint does not support timelines.");
 				return nullptr;
 			}
-			UK2Node_Timeline* Node = SpawnTyped<UK2Node_Timeline>(Graph, Position, [](UK2Node_Timeline*) {});
-			const FString Name = GetString(Spec, TEXT("name"));
-			if (!Name.IsEmpty() && Name != Node->TimelineName.ToString())
+			// Like the editor menu action: pick the name, create the template, then the node.
+			FString Name = GetString(Spec, TEXT("name")).TrimStartAndEnd();
+			Name.ReplaceInline(TEXT(" "), TEXT(""));
+			FName TimelineName = Name.IsEmpty() ? FBlueprintEditorUtils::FindUniqueTimelineName(BP) : FName(*Name);
+			TSet<FName> ExistingVariables;
+			FBlueprintEditorUtils::GetClassVariableList(BP, ExistingVariables, true);
+			if (BP->FindTimelineTemplateByVariableName(TimelineName) || ExistingVariables.Contains(TimelineName))
 			{
-				if (!FBlueprintEditorUtils::RenameTimeline(BP, Node->TimelineName, FName(*Name)))
+				if (GetBool(Spec, TEXT("unique"), false))
 				{
-					OutWarnings.Add(FString::Printf(TEXT("Could not rename the timeline to \"%s\"; it is called %s."), *Name, *Node->TimelineName.ToString()));
+					TimelineName = FBlueprintEditorUtils::FindUniqueTimelineName(BP);
+				}
+				else
+				{
+					OutError = FString::Printf(TEXT("A timeline or variable named \"%s\" already exists. Choose another name or pass unique=true."), *TimelineName.ToString());
+					return nullptr;
 				}
 			}
-			return Node;
+			UTimelineTemplate* Template = FBlueprintEditorUtils::AddNewTimeline(BP, TimelineName);
+			if (!Template)
+			{
+				OutError = FString::Printf(TEXT("Could not create the timeline template \"%s\"."), *TimelineName.ToString());
+				return nullptr;
+			}
+			return SpawnTyped<UK2Node_Timeline>(Graph, Position, [TimelineName, Template](UK2Node_Timeline* Node)
+			{
+				Node->TimelineName = TimelineName;
+				Node->bAutoPlay = Template->bAutoPlay;
+				Node->bLoop = Template->bLoop;
+				Node->bReplicated = Template->bReplicated;
+				Node->bIgnoreTimeDilation = Template->bIgnoreTimeDilation;
+			});
 		}
 		if (Type == TEXT("get_class_defaults") || Type == TEXT("class_defaults"))
 		{
@@ -682,6 +746,57 @@ namespace BAB
 			}
 			if (!RequireUbergraph(BP, Graph, TEXT("An input key event"), OutError)) return nullptr;
 			return SpawnTyped<UK2Node_InputKey>(Graph, Position, [Key](UK2Node_InputKey* Node) { Node->InputKey = Key; });
+		}
+		if (Type == TEXT("component_event") || Type == TEXT("component_bound_event"))
+		{
+			if (!RequireUbergraph(BP, Graph, TEXT("A component event"), OutError)) return nullptr;
+			const FString ComponentName = SpecString(Spec, TEXT("component"), TEXT("variable"));
+			const FString EventName = SpecString(Spec, TEXT("event"), TEXT("name"), TEXT("delegate"));
+			UClass* Self = GetBlueprintSelfClass(BP);
+			FObjectProperty* ComponentProperty = Self ? FindFProperty<FObjectProperty>(Self, FName(*ComponentName)) : nullptr;
+			if (!ComponentProperty && Self)
+			{
+				for (TFieldIterator<FObjectProperty> It(Self); It; ++It)
+				{
+					if (It->GetName().Equals(ComponentName, ESearchCase::IgnoreCase)) { ComponentProperty = *It; break; }
+				}
+			}
+			if (!ComponentProperty || !ComponentProperty->PropertyClass || !ComponentProperty->PropertyClass->IsChildOf(UActorComponent::StaticClass()))
+			{
+				TArray<FString> Names;
+				if (BP->SimpleConstructionScript)
+				{
+					for (USCS_Node* SCSNode : BP->SimpleConstructionScript->GetAllNodes()) if (SCSNode) Names.Add(SCSNode->GetVariableName().ToString());
+				}
+				OutError = FString::Printf(TEXT("Component \"%s\" not found on this Blueprint. Components: %s"), *ComponentName, *FString::Join(Names, TEXT(", ")));
+				return nullptr;
+			}
+			FMulticastDelegateProperty* DelegateProperty = FindDispatcherProperty(ComponentProperty->PropertyClass, EventName, OutError);
+			if (!DelegateProperty) return nullptr;
+			if (const UK2Node_ComponentBoundEvent* Existing = FKismetEditorUtilities::FindBoundEventForComponent(BP, DelegateProperty->GetFName(), ComponentProperty->GetFName()))
+			{
+				OutError = FString::Printf(TEXT("Event %s of component %s already exists as node %s. Connect to it instead."), *DelegateProperty->GetName(), *ComponentProperty->GetName(), *NodeId(Existing));
+				return nullptr;
+			}
+			return SpawnTyped<UK2Node_ComponentBoundEvent>(Graph, Position, [ComponentProperty, DelegateProperty](UK2Node_ComponentBoundEvent* Node)
+			{
+				Node->InitializeComponentBoundEventParams(ComponentProperty, DelegateProperty);
+			});
+		}
+		if (Type == TEXT("call_dispatcher") || Type == TEXT("call_event_dispatcher") || Type == TEXT("bind_dispatcher") || Type == TEXT("bind_event") || Type == TEXT("unbind_dispatcher") || Type == TEXT("unbind_event") || Type == TEXT("clear_dispatcher") || Type == TEXT("unbind_all"))
+		{
+			const FString DispatcherName = SpecString(Spec, TEXT("dispatcher"), TEXT("name"), TEXT("event"));
+			const FString ClassName = GetString(Spec, TEXT("class"));
+			const bool bSelfContext = ClassName.IsEmpty() || ClassName.Equals(TEXT("self"), ESearchCase::IgnoreCase);
+			UClass* OwnerClass = bSelfContext ? GetBlueprintSelfClass(BP) : ResolveClass(ClassName, OutError);
+			if (!OwnerClass) return nullptr;
+			FMulticastDelegateProperty* DelegateProperty = FindDispatcherProperty(OwnerClass, DispatcherName, OutError);
+			if (!DelegateProperty) return nullptr;
+			auto Configure = [DelegateProperty, bSelfContext, OwnerClass](UK2Node_BaseMCDelegate* Node) { Node->SetFromProperty(DelegateProperty, bSelfContext, OwnerClass); };
+			if (Type.StartsWith(TEXT("call"))) return SpawnTyped<UK2Node_CallDelegate>(Graph, Position, Configure);
+			if (Type.StartsWith(TEXT("bind"))) return SpawnTyped<UK2Node_AddDelegate>(Graph, Position, Configure);
+			if (Type.StartsWith(TEXT("unbind_d")) || Type == TEXT("unbind_event")) return SpawnTyped<UK2Node_RemoveDelegate>(Graph, Position, Configure);
+			return SpawnTyped<UK2Node_ClearDelegate>(Graph, Position, Configure);
 		}
 		if (Type == TEXT("spawner") || Type == TEXT("action"))
 		{

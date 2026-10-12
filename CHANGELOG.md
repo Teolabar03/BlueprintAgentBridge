@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 (2026-10-12)
+
+Building whole actors.
+
+- Components: `bp_add_component`, `bp_get_component`, `bp_set_component_property`,
+  `bp_remove_component` (SimpleConstructionScript nodes, attachment, template properties).
+- Component bound events (`component_event`), event dispatchers (`bp_add_event_dispatcher` and the
+  `call_dispatcher` / `bind_dispatcher` / `unbind_dispatcher` / `clear_dispatcher` nodes).
+- Interfaces: `bp_add_interface`, `bp_remove_interface`; interface functions resolve as events.
+- Class defaults: `bp_get_class_defaults`, `bp_set_class_default`.
+- Timelines: `bp_get_timeline`, `bp_update_timeline` with float, vector, linear color and event
+  tracks (keys and interpolation); the timeline node is rebuilt with one pin per track.
+- Positional struct literals (`[x, y, z]`) for any reflected property, reflected property setter
+  shared by nodes, component templates and class default objects.
+
 ## 0.1.1 (2026-10-12)
 
 Working safely with the editor open.
