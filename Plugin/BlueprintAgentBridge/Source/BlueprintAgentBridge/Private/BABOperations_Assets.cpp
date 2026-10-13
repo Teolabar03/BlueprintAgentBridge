@@ -146,6 +146,29 @@ namespace BAB
 			delete Handle;
 		}
 
+		// Keep the previous version of the file so a bad save can be undone even without
+		// source control. Copies live in Saved/BlueprintAgentBridge/Backups, newest kMaxBackups per asset.
+		FString BackupFile;
+		if (IFileManager::Get().FileExists(*Filename))
+		{
+			const FString PackageName = BP->GetOutermost()->GetName();
+			const FString BackupDir = FPaths::ProjectSavedDir() / TEXT("BlueprintAgentBridge") / TEXT("Backups") / FPaths::GetPath(PackageName.Mid(1));
+			const FString BaseName = FPackageName::GetShortName(PackageName);
+			BackupFile = FPaths::ConvertRelativePathToFull(BackupDir / FString::Printf(TEXT("%s.%s%s"), *BaseName, *FDateTime::Now().ToString(TEXT("%Y%m%d-%H%M%S-%s")), *FPaths::GetExtension(Filename, true)));
+			if (IFileManager::Get().Copy(*BackupFile, *Filename) != COPY_OK)
+			{
+				return FBABResult::Fail(FString::Printf(TEXT("Could not back up %s to %s; not saving."), *Filename, *BackupFile));
+			}
+			constexpr int32 kMaxBackups = 10;
+			TArray<FString> Existing;
+			IFileManager::Get().FindFiles(Existing, *(BackupDir / (BaseName + TEXT(".*"))), true, false);
+			Existing.Sort();
+			for (int32 i = 0; i < Existing.Num() - kMaxBackups; ++i)
+			{
+				IFileManager::Get().Delete(*(BackupDir / Existing[i]), false, /*EvenReadOnly*/ true, true);
+			}
+		}
+
 		UPackage* Package = BP->GetOutermost();
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
@@ -159,6 +182,10 @@ namespace BAB
 		FBABResult Result;
 		Result.Data->SetBoolField(TEXT("saved"), true);
 		Result.Data->SetStringField(TEXT("file"), FPaths::ConvertRelativePathToFull(Filename));
+		if (!BackupFile.IsEmpty())
+		{
+			Result.Data->SetStringField(TEXT("backup"), BackupFile);
+		}
 		Result.Data->SetStringField(TEXT("blueprint"), GetObjectPath(BP));
 		return Result;
 	}

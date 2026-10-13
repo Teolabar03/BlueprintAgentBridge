@@ -160,10 +160,12 @@ scripts\test.ps1
 scripts\serve.ps1 -Port 8765
 ```
 
-The HTTP endpoint can be exercised with curl:
+The HTTP endpoint can be exercised with curl. `/rpc` and `/shutdown` need the token that the
+server writes to `<Project>/Saved/BlueprintAgentBridge/server-<port>.token` each time it starts:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8765/rpc -d '{"op":"bp_read_graph","params":{"blueprint":"/Game/BP_Door"}}'
+TOKEN=$(cat MyGame/Saved/BlueprintAgentBridge/server-8765.token)
+curl -s -X POST http://127.0.0.1:8765/rpc -H "X-BAB-Token: $TOKEN" -d '{"op":"bp_read_graph","params":{"blueprint":"/Game/BP_Door"}}'
 ```
 
 ## Safety
@@ -172,7 +174,15 @@ curl -s -X POST http://127.0.0.1:8765/rpc -d '{"op":"bp_read_graph","params":{"b
 - `bp_save` compiles first and refuses to write a Blueprint with compile errors unless forced.
 - Read-only (checked-in) and locked asset files are detected and reported before saving.
 - Removing nodes, variables or graphs reports what breaks; removing something still in use needs `force`.
-- The HTTP server listens on the loopback interface only.
+- The HTTP server listens on the loopback interface only, refuses requests that come from web pages
+  (any `Origin` header, or a `Host` other than localhost) and requires a per-start random token on
+  `/rpc` and `/shutdown`.
+- The token file can be read only by the current user.
+- Only files inside the project directory are ever written (links and junctions are resolved first);
+  before overwriting an asset, `bp_save` copies the previous file to
+  `Saved/BlueprintAgentBridge/Backups` (the last 10 per asset are kept).
+- A failed edit is undone, in the open editor and in the headless server alike.
+- A headless editor started by the MCP server exits by itself when the MCP server process dies.
 
 ## Status
 

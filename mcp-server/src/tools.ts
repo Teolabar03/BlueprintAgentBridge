@@ -477,13 +477,13 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "bp_undo",
-    description: "Editor mode only: undo the last transaction if the bridge made it (each editing tool is one undo step in the open editor). force=true also undoes the user's own last action.",
+    description: "Undo the last transaction if the bridge made it (each editing tool is one undo step, in the open editor or in the headless server; not in commandlet mode, where every call is a new process). force=true also undoes the user's own last action.",
     input: { force: z.boolean().optional() },
     format: (r) => `undone: ${str(r.undone)}${r.next ? `\nnext undo would be: ${str(r.next)}` : ""}`,
   },
   {
     name: "bp_redo",
-    description: "Editor mode only: redo the last undone bridge transaction.",
+    description: "Redo the last undone bridge transaction (open editor or headless server).",
     input: { force: z.boolean().optional() },
     format: (r) => `redone: ${str(r.redone)}`,
   },
@@ -574,19 +574,23 @@ export function registerTools(server: McpServer, bridge: Bridge): void {
             }
             return { content: [{ type: "text" as const, text: lines.join("\n") }] };
           }
+          // start, stop and restart wait for the operations already queued (see Bridge.serialize).
           case "start":
-            await bridge.ensureConnected();
+            await bridge.serialize(() => bridge.ensureConnected());
             return { content: [{ type: "text" as const, text: `running (${bridge.describeOwnership()}): ${JSON.stringify(await bridge.health())}` }] };
           case "stop": {
-            const outcome = await bridge.stopServer(args.force ?? false);
+            const outcome = await bridge.serialize(() => bridge.stopServer(args.force ?? false));
             return { isError: outcome === "not-owned", content: [{ type: "text" as const, text: describeStop(outcome) }] };
           }
           case "restart": {
-            const outcome = await bridge.stopServer(args.force ?? false);
+            const outcome = await bridge.serialize(async () => {
+              const stopped = await bridge.stopServer(args.force ?? false);
+              if (stopped !== "not-owned") await bridge.ensureConnected();
+              return stopped;
+            });
             if (outcome === "not-owned") {
               return { isError: true, content: [{ type: "text" as const, text: describeStop(outcome) }] };
             }
-            await bridge.ensureConnected();
             return { content: [{ type: "text" as const, text: `restarted: ${JSON.stringify(await bridge.health())}` }] };
           }
           case "log":

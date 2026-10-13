@@ -2,6 +2,7 @@
 
 #include "BABContext.h"
 #include "BABTypes.h"
+#include "BABPlatform.h"
 #include "BlueprintAgentBridgeModule.h"
 
 #include "Engine/Blueprint.h"
@@ -196,6 +197,21 @@ namespace BAB
 		if (Filename.IsEmpty())
 		{
 			OutReason = FString::Printf(TEXT("Cannot resolve a file path for package %s."), *BP->GetOutermost()->GetName());
+			return false;
+		}
+		// Only the project's own files (Content and project plugins) may be written: never the
+		// engine installation or content mounted from elsewhere. Both paths are resolved through
+		// symbolic links and junctions, so a link inside Content cannot lead outside the project.
+		FString FullFilename;
+		FString ProjectDir;
+		if (!BAB::ResolveRealPath(Filename, FullFilename) || !BAB::ResolveRealPath(FPaths::ProjectDir(), ProjectDir))
+		{
+			OutReason = FString::Printf(TEXT("Cannot resolve the physical location of %s, so the bridge will not write it."), *Filename);
+			return false;
+		}
+		if (!FPaths::IsUnderDirectory(FullFilename, ProjectDir))
+		{
+			OutReason = FString::Printf(TEXT("%s is outside the project directory %s; the bridge only writes the project's own assets."), *FullFilename, *ProjectDir);
 			return false;
 		}
 		IFileManager& FileManager = IFileManager::Get();

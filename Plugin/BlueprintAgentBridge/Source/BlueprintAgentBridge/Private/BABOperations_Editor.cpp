@@ -12,9 +12,9 @@ namespace BAB
 {
 	static bool TransactionsAvailable(FString& OutError)
 	{
-		if (IsRunningCommandlet() || !GEditor || !GEditor->CanTransact())
+		if (!GEditor || !GEditor->CanTransact())
 		{
-			OutError = TEXT("Undo and redo are only available inside a running editor (a headless session keeps no undo history).");
+			OutError = TEXT("Undo and redo need the editor transaction buffer, which is not available in this process.");
 			return false;
 		}
 		return true;
@@ -31,7 +31,7 @@ void BABRegisterOperations_Editor()
 	using namespace BAB;
 	FBABDispatcher& D = FBABDispatcher::Get();
 
-	D.Register(TEXT("bp_undo"), TEXT("Undoes the last editor transaction if the bridge made it (editor mode only). force=true undoes any transaction, including the user's own."), [](const FJsonObject& Params) -> FBABResult
+	D.Register(TEXT("bp_undo"), TEXT("Undoes the last editor transaction if the bridge made it (editor or headless server; a one-shot commandlet has no history). force=true undoes any transaction, including the user's own."), [](const FJsonObject& Params) -> FBABResult
 	{
 		FString Error;
 		if (!TransactionsAvailable(Error)) return FBABResult::Fail(Error);
@@ -55,7 +55,7 @@ void BABRegisterOperations_Editor()
 		return Result;
 	}, EBABOpKind::NonTransactional);
 
-	D.Register(TEXT("bp_redo"), TEXT("Redoes the last undone editor transaction (editor mode only)."), [](const FJsonObject& Params) -> FBABResult
+	D.Register(TEXT("bp_redo"), TEXT("Redoes the last undone editor transaction (editor or headless server)."), [](const FJsonObject& Params) -> FBABResult
 	{
 		FString Error;
 		if (!TransactionsAvailable(Error)) return FBABResult::Fail(Error);

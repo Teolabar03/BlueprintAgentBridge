@@ -369,4 +369,102 @@ bool FBABActorBuildingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBABPinRebuildTest, "BlueprintAgentBridge.Nodes.PinsRebuiltByTheEngine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// Operations whose engine calls destroy or reorder pins: autowire into a wildcard Select option,
+// adding a Select option, disconnecting, and recombining a split pin through one of its sub pins.
+bool FBABPinRebuildTest::RunTest(const FString& Parameters)
+{
+	using namespace BABTest;
+	const FString Name = UniqueName(TEXT("BP_BABPins"));
+	const FString Path = TEXT("/Game/BABTests");
+	const FString BP = Path + TEXT("/") + Name;
+	FBABResult Create = Run(TEXT("bp_create_blueprint"), FString::Printf(TEXT("{\"path\":\"%s\",\"name\":\"%s\",\"parent_class\":\"Actor\"}"), *Path, *Name));
+	if (!TestTrue(TEXT("create"), Create.bOk)) { AddError(Errors(Create)); return false; }
+
+	FBABResult Select = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"select\"}")));
+	if (!TestTrue(TEXT("add select"), Select.bOk)) { AddError(Errors(Select)); return false; }
+	const FString SelectId = Select.Data->GetStringField(TEXT("id"));
+
+	// Autowire a new int node into the wildcard option: the Select rebuilds its pins.
+	FBABResult Random = Run(TEXT("bp_add_node"), ParamsFor(BP, FString::Printf(
+		TEXT("\"node\":{\"type\":\"call_function\",\"function\":\"KismetMathLibrary.RandomInteger\"},\"autowire_from\":{\"node\":\"%s\",\"pin\":\"Option 0\"}"), *SelectId)));
+	if (!TestTrue(TEXT("add node autowired to a Select option"), Random.bOk)) AddError(Errors(Random));
+	TestTrue(TEXT("autowire into the wildcard option is reported"), Random.bOk && Random.Data->GetBoolField(TEXT("autowired")));
+	const FString RandomId = Random.bOk ? Random.Data->GetStringField(TEXT("id")) : FString();
+
+	// Adding an option must report the option, not ReturnValue (Select keeps Index and ReturnValue last).
+	FBABResult AddPin = Run(TEXT("bp_add_pin"), ParamsFor(BP, FString::Printf(TEXT("\"node\":\"%s\""), *SelectId)));
+	if (!TestTrue(TEXT("select add pin"), AddPin.bOk)) AddError(Errors(AddPin));
+	const TArray<TSharedPtr<FJsonValue>>* NewPins = nullptr;
+	const bool bOnePin = AddPin.bOk && AddPin.Data->TryGetArrayField(TEXT("new_pins"), NewPins) && NewPins && NewPins->Num() == 1;
+	TestTrue(TEXT("exactly one new pin"), bOnePin);
+	if (bOnePin)
+	{
+		const FString NewName = (*NewPins)[0]->AsObject()->GetStringField(TEXT("name"));
+		TestTrue(FString::Printf(TEXT("new pin is an option (%s)"), *NewName), NewName.StartsWith(TEXT("Option")));
+	}
+
+	if (!RandomId.IsEmpty())
+	{
+		FBABResult Disconnect = Run(TEXT("bp_disconnect_pins"), ParamsFor(BP, FString::Printf(
+			TEXT("\"from\":{\"node\":\"%s\",\"pin\":\"ReturnValue\"},\"to\":{\"node\":\"%s\",\"pin\":\"Option 0\"}"), *RandomId, *SelectId)));
+		if (!TestTrue(TEXT("disconnect the autowired link"), Disconnect.bOk)) AddError(Errors(Disconnect));
+	}
+
+	// Split a struct pin, then recombine it by naming a sub pin (which RecombinePin destroys).
+	FBABResult Print = Run(TEXT("bp_add_node"), ParamsFor(BP, TEXT("\"node\":{\"type\":\"call_function\",\"function\":\"KismetSystemLibrary.PrintString\"}")));
+	if (!TestTrue(TEXT("add print string"), Print.bOk)) { AddError(Errors(Print)); return false; }
+	const FString PrintId = Print.Data->GetStringField(TEXT("id"));
+	FBABResult Split = Run(TEXT("bp_split_pin"), ParamsFor(BP, FString::Printf(TEXT("\"node\":\"%s\",\"pin\":\"TextColor\""), *PrintId)));
+	if (!TestTrue(TEXT("split TextColor"), Split.bOk)) AddError(Errors(Split));
+	FBABResult Recombine = Run(TEXT("bp_recombine_pin"), ParamsFor(BP, FString::Printf(TEXT("\"node\":\"%s\",\"pin\":\"TextColor_R\""), *PrintId)));
+	if (!TestTrue(TEXT("recombine through a sub pin"), Recombine.bOk)) AddError(Errors(Recombine));
+	FBABResult Read = Run(TEXT("bp_read_graph"), ParamsFor(BP, TEXT("")));
+	TestTrue(TEXT("TextColor is whole again"), Read.bOk && !Read.Data->GetStringField(TEXT("text")).Contains(TEXT("TextColor_R")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBABFailedEditRollbackTest, "BlueprintAgentBridge.Safety.FailedEditIsUndone", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// An operation that changes the Blueprint and then fails must leave nothing behind.
+bool FBABFailedEditRollbackTest::RunTest(const FString& Parameters)
+{
+	using namespace BABTest;
+	const FString Name = UniqueName(TEXT("BP_BABRollback"));
+	const FString Path = TEXT("/Game/BABTests");
+	const FString BP = Path + TEXT("/") + Name;
+	FBABResult Create = Run(TEXT("bp_create_blueprint"), FString::Printf(TEXT("{\"path\":\"%s\",\"name\":\"%s\",\"parent_class\":\"Actor\"}"), *Path, *Name));
+	if (!TestTrue(TEXT("create"), Create.bOk)) { AddError(Errors(Create)); return false; }
+
+	// Test-only operation: adds a variable through the dispatcher, then fails.
+	FBABDispatcher::Get().Register(TEXT("bab_test_edit_then_fail"), TEXT("Test only."), [](const FJsonObject& Params) -> FBABResult
+	{
+		FBABResult Added = FBABDispatcher::Get().Dispatch(TEXT("bp_add_variable"), Params);
+		FBABResult Failed = FBABResult::Fail(TEXT("Deliberate failure after a change."));
+		if (!Added.bOk) Failed.Errors.Append(Added.Errors);
+		return Failed;
+	});
+	FBABResult Failed = Run(TEXT("bab_test_edit_then_fail"), ParamsFor(BP, TEXT("\"name\":\"Leftover\",\"type\":\"int\"")));
+	TestFalse(TEXT("the test operation fails"), Failed.bOk);
+	TestEqual(TEXT("only the deliberate error"), Failed.Errors.Num(), 1);
+
+	FBABResult Describe = Run(TEXT("bp_describe_blueprint"), ParamsFor(BP, TEXT("\"format\":\"text\"")));
+	TestTrue(TEXT("describe ok"), Describe.bOk);
+	TestFalse(TEXT("the variable added before the failure is gone"), Describe.Data->GetStringField(TEXT("text")).Contains(TEXT("Leftover")));
+
+	// An inner operation fails but the outer one reports success: the whole operation must fail and be undone.
+	FBABDispatcher::Get().Register(TEXT("bab_test_nested_failure"), TEXT("Test only."), [](const FJsonObject& Params) -> FBABResult
+	{
+		FBABDispatcher::Get().Dispatch(TEXT("bp_add_variable"), Params);
+		FBABDispatcher::Get().Dispatch(TEXT("bp_add_variable"), Params);
+		return FBABResult::Ok();
+	});
+	FBABResult Nested = Run(TEXT("bab_test_nested_failure"), ParamsFor(BP, TEXT("\"name\":\"NestedLeftover\",\"type\":\"int\"")));
+	TestFalse(TEXT("an inner failure fails the outer operation"), Nested.bOk);
+	FBABResult Describe2 = Run(TEXT("bp_describe_blueprint"), ParamsFor(BP, TEXT("\"format\":\"text\"")));
+	TestFalse(TEXT("the inner change is undone too"), Describe2.Data->GetStringField(TEXT("text")).Contains(TEXT("NestedLeftover")));
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -62,6 +62,10 @@ private:
 	TSharedRef<FJsonObject> HandleSingle(const FJsonObject& Request);
 
 	TMap<FString, FBABOperation> Operations;
+	/** Transactional operations currently running (above 1 when one operation dispatches another). */
+	int32 TransactionDepth = 0;
+	/** Set when an operation dispatched inside another one fails. */
+	bool bNestedFailure = false;
 };
 
 /** Registers every built-in operation. Safe to call more than once. */

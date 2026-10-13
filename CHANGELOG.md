@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.2.1 (2026-10-13)
+
+Security and data-safety fixes from a code review.
+
+- HTTP server: random per-start token (`X-BAB-Token`, stored in
+  `Saved/BlueprintAgentBridge/server-<port>.token`) required on `/rpc` and `/shutdown`; requests
+  with an `Origin` header or a non-loopback `Host` are refused, so web pages cannot reach the editor
+  (CSRF, DNS rebinding). The MCP server sends the token automatically.
+- Writes are limited to files inside the project directory (no engine content).
+- `bp_save` backs up the previous asset file to `Saved/BlueprintAgentBridge/Backups` (last 10 per
+  asset) and reports it as `backup`.
+- `-serve -parentpid=<pid>`: the headless editor exits when the MCP server that started it dies
+  (passed automatically unless `--keep-alive`).
+- The engine registry lookup runs `reg` without a shell.
+- A busy port is now detected in commandlet mode: before, the bind failed silently inside
+  `StartAllListeners`, the second server reported itself as listening and kept running.
+- Pins destroyed or reordered by the engine are no longer dereferenced: autowiring into a wildcard
+  (Select option), `bp_disconnect_pins` on split pins, `bp_recombine_pin` given a sub pin, and
+  `bp_connect_pins` when callbacks rebuild pins. `bp_add_pin` reports the new pin by name (on a
+  Select it used to report `ReturnValue`).
+- The MCP server runs bridge requests one at a time in call order, including `bp_server`
+  start/stop/restart; a restart waits until the old server has really stopped.
+- Failed edits are really undone. `FScopedTransaction::Cancel` only drops the undo record and keeps
+  the changes, so since 0.1.1 a failed edit could leave a half-built graph; the transaction is now
+  closed and undone without a redo entry.
+- The headless server creates the editor transaction buffer (commandlets do not get one), so the
+  rollback above and `bp_undo` / `bp_redo` work there too.
+- The token file is created with an ACL for the current user and SYSTEM only (mode 0600 elsewhere).
+- The project-directory check resolves symbolic links and junctions, so a link inside `Content`
+  cannot lead a save outside the project.
+
 ## 0.2.0 (2026-10-12)
 
 Building whole actors.

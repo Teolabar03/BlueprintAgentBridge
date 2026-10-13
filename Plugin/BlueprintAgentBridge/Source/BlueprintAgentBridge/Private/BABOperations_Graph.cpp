@@ -355,18 +355,27 @@ void BABRegisterOperations_Graph()
 		bool bAutowired = false;
 		if (AutowireFrom)
 		{
+			// Autowiring can rebuild the source node's pins (a wildcard Select option, for one), so
+			// AutowireFrom must not be dereferenced afterwards: keep its node and description.
+			UEdGraphNode* AutowireNode = AutowireFrom->GetOwningNode();
+			const FString AutowireDescription = PinDescription(AutowireFrom);
 			Node->AutowireNewNode(AutowireFrom);
 			for (UEdGraphPin* Pin : Node->Pins)
 			{
-				if (Pin && Pin->LinkedTo.Contains(AutowireFrom)) { bAutowired = true; break; }
+				if (!Pin) continue;
+				for (UEdGraphPin* Linked : Pin->LinkedTo)
+				{
+					if (Linked && AutowireNode->Pins.Contains(Linked)) { bAutowired = true; break; }
+				}
+				if (bAutowired) break;
 			}
 			if (!bAutowired)
 			{
-				Result.Warn(FString::Printf(TEXT("Could not autowire from %s: no compatible pin. Use bp_connect_pins."), *PinDescription(AutowireFrom)));
+				Result.Warn(FString::Printf(TEXT("Could not autowire from %s: no compatible pin. Use bp_connect_pins."), *AutowireDescription));
 			}
-			else if (EnableGhostNode(AutowireFrom->GetOwningNode()))
+			else if (EnableGhostNode(AutowireNode))
 			{
-				Result.Warn(FString::Printf(TEXT("Enabled the template node %s because it is now connected."), *NodeId(AutowireFrom->GetOwningNode())));
+				Result.Warn(FString::Printf(TEXT("Enabled the template node %s because it is now connected."), *NodeId(AutowireNode)));
 			}
 		}
 		MarkModified(Ctx.Blueprint, Node);
@@ -509,11 +518,26 @@ void BABRegisterOperations_Graph()
 			return FBABResult::Fail(FString::Printf(TEXT("Cannot connect %s to %s: %s"), *PinDescription(From), *PinDescription(To), *Response.Message.ToString()));
 		}
 
-		UEdGraph* Graph = From->GetOwningNode()->GetGraph();
+		UEdGraphNode* FromNode = From->GetOwningNode();
+		UEdGraphNode* ToNode = To->GetOwningNode();
+		UEdGraph* Graph = FromNode->GetGraph();
 		TSet<UEdGraphNode*> NodesBefore;
 		for (UEdGraphNode* Node : Graph->Nodes) NodesBefore.Add(Node);
-		TArray<UEdGraphPin*> FromLinksBefore = From->LinkedTo;
-		TArray<UEdGraphPin*> ToLinksBefore = To->LinkedTo;
+		// Node callbacks may destroy pins during the connection (recombined split pins, rebuilt
+		// wildcard nodes): describe everything now and afterwards only compare pointers, or
+		// dereference a pin after checking that its node still owns it.
+		const TSharedRef<FJsonObject> FromJson = PinRefJson(From);
+		const TSharedRef<FJsonObject> ToJson = PinRefJson(To);
+		TArray<TPair<UEdGraphPin*, TSharedRef<FJsonObject>>> FromLinksBefore;
+		TArray<TPair<UEdGraphPin*, TSharedRef<FJsonObject>>> ToLinksBefore;
+		for (UEdGraphPin* Old : From->LinkedTo)
+		{
+			if (Old) FromLinksBefore.Emplace(Old, PinRefJson(Old));
+		}
+		for (UEdGraphPin* Old : To->LinkedTo)
+		{
+			if (Old) ToLinksBefore.Emplace(Old, PinRefJson(Old));
+		}
 
 		const bool bConnected = Schema->TryCreateConnection(From, To);
 		if (!bConnected)
@@ -525,8 +549,8 @@ void BABRegisterOperations_Graph()
 		Result.Data->SetBoolField(TEXT("connected"), true);
 		Result.Data->SetStringField(TEXT("response"), ConnectionResponseName(Response.Response));
 		if (!Response.Message.IsEmpty()) Result.Data->SetStringField(TEXT("message"), Response.Message.ToString());
-		Result.Data->SetObjectField(TEXT("from"), PinRefJson(From));
-		Result.Data->SetObjectField(TEXT("to"), PinRefJson(To));
+		Result.Data->SetObjectField(TEXT("from"), FromJson);
+		Result.Data->SetObjectField(TEXT("to"), ToJson);
 
 		TArray<TSharedPtr<FJsonValue>> NewNodes;
 		for (UEdGraphNode* Node : Graph->Nodes)
@@ -541,14 +565,16 @@ void BABRegisterOperations_Graph()
 		{
 			Result.Warn(FString::Printf(TEXT("The schema inserted %d conversion node(s) between the pins."), NewNodes.Num()));
 		}
+		const bool bFromAlive = FromNode->Pins.Contains(From);
+		const bool bToAlive = ToNode->Pins.Contains(To);
 		TArray<TSharedPtr<FJsonValue>> Replaced;
-		for (UEdGraphPin* Old : FromLinksBefore)
+		for (const TPair<UEdGraphPin*, TSharedRef<FJsonObject>>& Old : FromLinksBefore)
 		{
-			if (Old && !From->LinkedTo.Contains(Old)) Replaced.Add(ObjectValue(PinRefJson(Old)));
+			if (!bFromAlive || !From->LinkedTo.Contains(Old.Key)) Replaced.Add(ObjectValue(Old.Value));
 		}
-		for (UEdGraphPin* Old : ToLinksBefore)
+		for (const TPair<UEdGraphPin*, TSharedRef<FJsonObject>>& Old : ToLinksBefore)
 		{
-			if (Old && !To->LinkedTo.Contains(Old)) Replaced.Add(ObjectValue(PinRefJson(Old)));
+			if (!bToAlive || !To->LinkedTo.Contains(Old.Key)) Replaced.Add(ObjectValue(Old.Value));
 		}
 		Result.Data->SetArrayField(TEXT("replaced_links"), Replaced);
 		if (Replaced.Num() > 0)
@@ -556,7 +582,7 @@ void BABRegisterOperations_Graph()
 			Result.Warn(FString::Printf(TEXT("%d existing link(s) were replaced by this connection."), Replaced.Num()));
 		}
 		// Connecting to a disabled template event (BeginPlay, Tick...) enables it, as the editor does.
-		for (UEdGraphNode* Node : { From->GetOwningNode(), To->GetOwningNode() })
+		for (UEdGraphNode* Node : { FromNode, ToNode })
 		{
 			if (EnableGhostNode(Node))
 			{
@@ -585,10 +611,11 @@ void BABRegisterOperations_Graph()
 			{
 				return FBABResult::Fail(FString::Printf(TEXT("%s and %s are not connected."), *PinDescription(From), *PinDescription(To)));
 			}
-			From->GetSchema()->BreakSinglePinLink(From, To);
+			// Describe the link first: breaking it can destroy pins (recombined Make Array sub pins).
 			TSharedRef<FJsonObject> Link = NewObject();
 			Link->SetObjectField(TEXT("from"), PinRefJson(From));
 			Link->SetObjectField(TEXT("to"), PinRefJson(To));
+			From->GetSchema()->BreakSinglePinLink(From, To);
 			Broken.Add(ObjectValue(Link));
 		}
 		else
@@ -664,7 +691,11 @@ void BABRegisterOperations_Graph()
 		FString Error;
 		UEdGraphNode* Node = NodeFromParams(Ctx, Params, Error);
 		if (!Node) return FBABResult::Fail(Error);
-		const int32 PinsBefore = Node->Pins.Num();
+		TSet<FName> PinNamesBefore;
+		for (const UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin) PinNamesBefore.Add(Pin->PinName);
+		}
 		Node->Modify();
 		if (IK2Node_AddPinInterface* AddPin = Cast<IK2Node_AddPinInterface>(Node))
 		{
@@ -682,9 +713,14 @@ void BABRegisterOperations_Graph()
 		MarkModified(Ctx.Blueprint, Node);
 		FBABResult Result;
 		TArray<TSharedPtr<FJsonValue>> NewPins;
-		for (int32 Index = PinsBefore; Index < Node->Pins.Num(); ++Index)
+		// Nodes rebuild their pins when one is added and do not always append it (Select keeps
+		// Index and ReturnValue last), so compare names instead of positions.
+		for (UEdGraphPin* Pin : Node->Pins)
 		{
-			NewPins.Add(ObjectValue(PinToJson(Node->Pins[Index], FReadOptions())));
+			if (Pin && !Pin->ParentPin && !PinNamesBefore.Contains(Pin->PinName))
+			{
+				NewPins.Add(ObjectValue(PinToJson(Pin, FReadOptions())));
+			}
 		}
 		Result.Data->SetArrayField(TEXT("new_pins"), NewPins);
 		Result.Data->SetObjectField(TEXT("node"), NodeToJson(Node, FReadOptions()));
@@ -763,11 +799,13 @@ void BABRegisterOperations_Graph()
 		if (Pin->SubPins.Num() > 0) Target = Pin->SubPins[0];
 		if (!Target->ParentPin) return FBABResult::Fail(FString::Printf(TEXT("%s is not a split pin."), *PinDescription(Pin)));
 		const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
-		Target->GetOwningNode()->Modify();
+		// RecombinePin destroys the sub pins, and Pin may be one of them: keep only the node.
+		UEdGraphNode* Node = Target->GetOwningNode();
+		Node->Modify();
 		Schema->RecombinePin(Target);
-		MarkModified(Ctx.Blueprint, Pin->GetOwningNode());
+		MarkModified(Ctx.Blueprint, Node);
 		FBABResult Result;
-		Result.Data->SetObjectField(TEXT("node"), NodeToJson(Pin->GetOwningNode(), FReadOptions()));
+		Result.Data->SetObjectField(TEXT("node"), NodeToJson(Node, FReadOptions()));
 		return Result;
 	});
 

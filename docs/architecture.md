@@ -36,7 +36,7 @@ error messages are identical everywhere.
 | Mode | When | Notes |
 |---|---|---|
 | Headless commandlet (`-run=BlueprintAgentBridge -serve`) | default for agents; CI | No Slate, NullRHI, starts in 20-60 s. The commandlet ticks the core ticker, the task graph and the editor tickables so the HTTP module, asset loading and the action database keep working. |
-| Interactive editor (`-BABServer`, console `BAB.StartServer`, or the setting) | when a human watches the editor | Graph edits appear live in open Blueprint editors because the same `UEdGraph` notifications fire. Every editing operation runs inside an `FScopedTransaction` named `Blueprint Agent Bridge: <op>`, so it is one undo step; a failed operation cancels its transaction and leaves nothing behind. `bp_undo` / `bp_redo` act only on those transactions unless forced. |
+| Interactive editor (`-BABServer`, console `BAB.StartServer`, or the setting) | when a human watches the editor | Graph edits appear live in open Blueprint editors because the same `UEdGraph` notifications fire. Every editing operation runs inside an `FScopedTransaction` named `Blueprint Agent Bridge: <op>`, so it is one undo step; a failed operation is undone (closing the transaction and undoing it, because `FScopedTransaction::Cancel` keeps the changes) and leaves nothing behind. The headless server creates the same transaction buffer, which a commandlet does not get by default. `bp_undo` / `bp_redo` act only on those transactions unless forced. |
 
 **One editor per project.** Before starting a headless editor, the MCP server lists the Unreal
 Editor processes that have the project open (PowerShell `Win32_Process` on Windows, `ps` elsewhere).
@@ -101,6 +101,7 @@ API. Porting to 5.4/5.5 should mostly be a matter of these.
   C++ parent are visible to graphs but not listed or editable.
 - Widget (UMG) and Animation Blueprints load and their event graphs can be edited, but the
   designer/anim graphs are out of scope. User-defined struct and enum assets cannot be created yet.
-- No undo: operate on a version-controlled project. The MCP skill tells the agent to never save
-  without an explicit request.
+- Undo history lives in memory only and disappears with the process: operate on a
+  version-controlled project. `bp_save` keeps the previous file in `Saved/BlueprintAgentBridge/Backups`.
+  The MCP skill tells the agent to never save without an explicit request.
 - Level Blueprints are not supported (they live inside maps).

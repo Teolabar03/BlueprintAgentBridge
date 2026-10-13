@@ -7,7 +7,7 @@
 //   auto       like http, but when nothing answers it starts a headless commandlet
 //              (UnrealEditor-Cmd -run=BlueprintAgentBridge -serve) and keeps it for the session
 //   commandlet one process per request (slow, no state kept); useful for CI
-import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { spawn, execSync, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, mkdirSync, openSync, closeSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { join, dirname, resolve, basename } from "node:path";
 import { tmpdir, platform } from "node:os";
@@ -193,7 +193,8 @@ function readEngineAssociation(projectFile?: string): string | undefined {
 
 function regQuery(key: string, value: string): string | undefined {
   try {
-    const out = execSync(`reg query "${key}" /v "${value}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    // No shell: the key contains EngineAssociation from the .uproject, which is untrusted text.
+    const out = execFileSync("reg", ["query", key, "/v", value], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
     const match = out.match(/REG_SZ\s+(.+)$/m);
     return match ? match[1].trim() : undefined;
   } catch {
@@ -250,11 +251,29 @@ export class Bridge {
   private child?: ChildProcess;
   private spawnedByUs = false;
   private starting?: Promise<void>;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(public readonly config: BridgeConfig) {}
 
   get baseUrl(): string {
     return `http://${this.config.host}:${this.config.port}`;
+  }
+
+  /** Written by the plugin when its server starts; required on POST /rpc and /shutdown. */
+  get tokenFile(): string | undefined {
+    if (!this.config.projectFile) return undefined;
+    return join(dirname(this.config.projectFile), "Saved", "BlueprintAgentBridge", `server-${this.config.port}.token`);
+  }
+
+  private authHeaders(): Record<string, string> {
+    const file = this.tokenFile;
+    if (!file || !existsSync(file)) {
+      throw new Error(
+        `The bridge answers on ${this.baseUrl} but its access token was not found (${file ?? "no project configured"}). ` +
+          `The token is written to <Project>/Saved/BlueprintAgentBridge/ when the server starts: check that --project points at the project the editor has open.`
+      );
+    }
+    return { "x-bab-token": readFileSync(file, "utf8").trim() };
   }
 
   get serverLogFile(): string | undefined {
@@ -370,6 +389,8 @@ export class Bridge {
       "-NoLogTimes",
       "-stdout",
       "-FullStdOutLogOutput",
+      // Without --keep-alive the editor exits by itself if this process dies without stopping it.
+      ...(this.config.keepAlive ? [] : [`-parentpid=${process.pid}`]),
       ...this.config.extraArgs,
     ];
     log(`starting headless editor: ${basename(cmd)} ${args.join(" ")}`);
@@ -442,7 +463,7 @@ export class Bridge {
       return "not-owned";
     }
     try {
-      await fetch(`${this.baseUrl}/shutdown`, { method: "POST" });
+      await fetch(`${this.baseUrl}/shutdown`, { method: "POST", headers: this.authHeaders() });
     } catch {
       /* the process may close the socket while answering */
     }
@@ -453,6 +474,13 @@ export class Bridge {
         await new Promise((r) => setTimeout(r, 250));
       }
       this.killChild();
+    } else {
+      // A server we did not start (interactive editor) stops on its next tick: wait until it no
+      // longer answers, so a restart does not mistake the dying server for a running one.
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline && (await this.health(1000))) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
     }
     return "stopped";
   }
@@ -468,28 +496,43 @@ export class Bridge {
     return this.ownsServer() ? "started by this MCP server" : "started elsewhere (interactive editor or another tool)";
   }
 
+  /**
+   * Requests run one at a time, in the order the tools were called: parallel tool calls from the
+   * client would otherwise reach the editor in any order, and two commandlets on one project
+   * would edit separate copies of the same assets.
+   */
+  serialize<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(work);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
   async call(op: string, params: Record<string, unknown>): Promise<BridgeResponse> {
     const request = { op, params };
-    if (this.config.mode === "commandlet") {
-      return this.callCommandlet(request);
-    }
-    await this.ensureConnected();
-    return this.post(request);
+    return this.serialize(async () => {
+      if (this.config.mode === "commandlet") {
+        return this.callCommandlet(request);
+      }
+      await this.ensureConnected();
+      return this.post(request);
+    });
   }
 
   async batch(operations: Array<{ op: string; params: Record<string, unknown> }>, stopOnError = true): Promise<Record<string, unknown>> {
     const request = { batch: operations, stop_on_error: stopOnError };
-    if (this.config.mode === "commandlet") {
-      return this.callCommandlet(request) as unknown as Record<string, unknown>;
-    }
-    await this.ensureConnected();
-    return this.post(request) as unknown as Record<string, unknown>;
+    return this.serialize(async () => {
+      if (this.config.mode === "commandlet") {
+        return this.callCommandlet(request) as unknown as Record<string, unknown>;
+      }
+      await this.ensureConnected();
+      return this.post(request) as unknown as Record<string, unknown>;
+    });
   }
 
   private async post(body: unknown): Promise<BridgeResponse> {
     const response = await fetch(`${this.baseUrl}/rpc`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...this.authHeaders() },
       body: JSON.stringify(body),
     });
     const text = await response.text();

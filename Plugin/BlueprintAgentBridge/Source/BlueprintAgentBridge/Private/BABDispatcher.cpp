@@ -6,6 +6,7 @@
 #include "Misc/CoreMisc.h"
 #include "Editor.h"
 #include "ScopedTransaction.h"
+#include "Editor/Transactor.h"
 
 #define LOCTEXT_NAMESPACE "BlueprintAgentBridge"
 
@@ -74,19 +75,54 @@ FBABResult FBABDispatcher::Dispatch(const FString& Op, const FJsonObject& Params
 	const bool bInteractiveEditor = !IsRunningCommandlet() && GEditor != nullptr;
 
 	FBABResult Result;
-	if (Operation->Kind == EBABOpKind::Transactional && bInteractiveEditor && GEditor->CanTransact())
+	if (Operation->Kind == EBABOpKind::Transactional && TransactionDepth > 0)
 	{
-		// Inside a running editor every edit becomes one undo step, and a failed edit leaves nothing behind.
-		FScopedTransaction Transaction(FText::Format(LOCTEXT("OpTransaction", "{0}{1}"), FText::FromString(TransactionPrefix()), FText::FromString(Op)));
+		// Called from inside another operation: UE does not nest transactions, so this one shares the
+		// outer transaction. A failure here makes the outer operation fail and undo everything.
 		Result = Operation->Handler(Params);
 		if (!Result.bOk)
 		{
-			Transaction.Cancel();
+			bNestedFailure = true;
+		}
+	}
+	else if (Operation->Kind == EBABOpKind::Transactional && GEditor && GEditor->Trans && GEditor->CanTransact())
+	{
+		// Every edit is one transaction (one undo step in a running editor). A failed edit is undone:
+		// FScopedTransaction::Cancel only drops the record and keeps the changes already made, so the
+		// transaction is closed and then undone without a redo entry. The headless editor has the
+		// same transaction buffer, so this also keeps a failed edit from leaving a half-built graph.
+		const FText Title = FText::Format(LOCTEXT("OpTransaction", "{0}{1}"), FText::FromString(TransactionPrefix()), FText::FromString(Op));
+		const FGuid PreviousId = GEditor->Trans->GetUndoContext(false).TransactionId;
+		{
+			FScopedTransaction Transaction(Title);
+			TGuardValue<int32> Depth(TransactionDepth, TransactionDepth + 1);
+			bNestedFailure = false;
+			Result = Operation->Handler(Params);
+			if (bNestedFailure && Result.bOk)
+			{
+				Result.Error(TEXT("An operation run inside this one failed, so the whole operation was undone."));
+			}
+			bNestedFailure = false;
+		}
+		if (!Result.bOk)
+		{
+			const FTransactionContext Last = GEditor->Trans->GetUndoContext(false);
+			if (Last.TransactionId != PreviousId && Last.Title.EqualTo(Title))
+			{
+				if (!GEditor->UndoTransaction(/*bCanRedo*/ false))
+				{
+					Result.Warn(TEXT("The operation failed and its partial changes could not be undone: read the graph before continuing."));
+				}
+			}
 		}
 	}
 	else
 	{
 		Result = Operation->Handler(Params);
+		if (!Result.bOk && Operation->Kind == EBABOpKind::Transactional)
+		{
+			Result.Warn(TEXT("No transaction buffer is available here, so partial changes of this failed operation were not undone: read the graph before continuing."));
+		}
 	}
 
 	if (Operation->Kind != EBABOpKind::ReadOnly && bInteractiveEditor && GEditor->PlayWorld != nullptr)

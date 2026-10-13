@@ -13,6 +13,10 @@ class IHttpRouter;
  *   GET  /health    liveness + engine info
  *   GET  /ops       operation list
  *   POST /shutdown  asks the serving loop (commandlet) to exit, or stops the server in the editor
+ *
+ * Every request must name a loopback Host and carry no Origin header (browsers always send one
+ * on cross-site requests, which blocks CSRF and DNS rebinding). /rpc and /shutdown also require
+ * the header "X-BAB-Token" with the random token written to GetTokenFilePath() at start.
  */
 class FBABHttpServer
 {
@@ -29,7 +33,11 @@ public:
 	double GetLastRequestTime() const { return LastRequestTime; }
 	int32 GetRequestCount() const { return RequestCount; }
 
+	/** <Project>/Saved/BlueprintAgentBridge/server-<port>.token */
+	static FString GetTokenFilePath(uint32 InPort);
+
 private:
+	FString Token;
 	TSharedPtr<IHttpRouter> Router;
 	TArray<FHttpRouteHandle> Routes;
 	uint32 Port = 0;

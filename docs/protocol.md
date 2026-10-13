@@ -32,10 +32,20 @@ node inserted, ...).
 
 | Transport | How |
 |---|---|
-| HTTP (editor or headless) | `POST http://127.0.0.1:8765/rpc` with the request as body. `GET /health`, `GET /ops`, `POST /shutdown`. Loopback only. |
+| HTTP (editor or headless) | `POST http://127.0.0.1:8765/rpc` with the request as body. `GET /health`, `GET /ops`, `POST /shutdown`. Loopback only; see *HTTP access* below. |
 | Commandlet, one shot | `UnrealEditor-Cmd.exe Game.uproject -run=BlueprintAgentBridge -request=req.json -response=res.json` (exit code 0 when `ok`) |
-| Commandlet, server | `UnrealEditor-Cmd.exe Game.uproject -run=BlueprintAgentBridge -serve -port=8765 [-idle=600]` prints `BAB_SERVER_READY` when listening |
+| Commandlet, server | `UnrealEditor-Cmd.exe Game.uproject -run=BlueprintAgentBridge -serve -port=8765 [-idle=600] [-parentpid=<pid>]` prints `BAB_SERVER_READY` when listening; with `-parentpid` it exits when that process is gone |
 | Interactive editor | start with `-BABServer [-BABPort=8765]`, enable *Auto Start Server* in Editor Preferences > Plugins > Blueprint Agent Bridge, or run the console command `BAB.StartServer [port]` |
+
+### HTTP access
+
+- Requests with an `Origin` header get 403: browsers add it to cross-site requests, so a web page
+  cannot drive the editor. A `Host` other than `127.0.0.1`, `localhost` or `[::1]` also gets 403
+  (DNS rebinding).
+- `POST /rpc` and `POST /shutdown` need the header `X-BAB-Token: <token>`, otherwise 401. The token
+  is random, written to `<Project>/Saved/BlueprintAgentBridge/server-<port>.token` when the server
+  starts and deleted when it stops. The MCP server reads it from there.
+- `GET /health` and `GET /ops` need no token.
 
 ## Common parameters
 
@@ -68,10 +78,10 @@ node inserted, ...).
 | `bp_undo` | `force` (also undo transactions not made by the bridge) | `undone` (transaction title), `next` |
 | `bp_redo` | `force` | `redone` |
 
-Inside a running editor every editing operation is wrapped in a transaction titled
-`Blueprint Agent Bridge: <op>` (one Ctrl+Z step); failed operations are cancelled and leave no
-partial change. Headless sessions keep no undo history, so these two operations fail there with a
-clear message. `bp_list_operations` reports the kind of each operation (`read`, `edit`, `other`).
+Every editing operation is wrapped in a transaction titled `Blueprint Agent Bridge: <op>` (one
+Ctrl+Z step in a running editor). A failed operation is undone, so it leaves no partial change. The
+headless server (`-serve`) creates the editor transaction buffer too, so `bp_undo` / `bp_redo` work
+there; a one-shot commandlet (`-request=`) starts a new process for every call and has no history. `bp_list_operations` reports the kind of each operation (`read`, `edit`, `other`).
 
 ### Graph reading and search
 

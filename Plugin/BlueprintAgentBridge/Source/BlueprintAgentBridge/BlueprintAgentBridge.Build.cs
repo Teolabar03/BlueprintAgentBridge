@@ -33,5 +33,11 @@ public class BlueprintAgentBridge : ModuleRules
 			"SlateCore",
 			"EditorSubsystem",
 		});
+
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			// Token file ACL (OpenProcessToken, ConvertSidToStringSid, security descriptors).
+			PublicSystemLibraries.Add("Advapi32.lib");
+		}
 	}
 }
